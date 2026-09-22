@@ -1,0 +1,24 @@
+# 运行时配置。jwt_secret 首次启动若留空会自动生成并写回。
+# 管理员与 Telegram API 凭证优先用环境变量 ADMIN_* / TG_*。
+
+bind: "0.0.0.0:3030"
+download_dir: "./downloads"
+web_dir: "./web/dist"
+db_path: "./config/tdload.db"
+session_dir: "./config/session"
+
+# Telegram API。留空时启动会自动写入 Desktop 公开凭证（与 tdl 相同：2040 / b18441a1...）
+# 也可设环境变量 TG_APP_ID / TG_APP_HASH 覆盖。
+app_id: 2040
+app_hash: "b18441a1ff607e10a989891a5462e627"
+
+threads: 8
+concurrency: 4
+skip_same: true
+group_album: true
+rewrite_ext: false
+takeout: false
+template: "{{ .DialogID }}_{{ .MessageID }}_{{ .FileName }}"
+
+proxy: ""
+jwt_secret: ""

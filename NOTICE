@@ -1,0 +1,16 @@
+# tdload
+
+Copyright (C) 2026 tdload contributors
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as published
+by the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+This program incorporates or links against third-party software including:
+
+- iyear/tdl (https://github.com/iyear/tdl) — AGPL-3.0
+- gotd/td and related Telegram MTProto libraries
+- Naive UI, Vue, and other frontend dependencies (see web/pnpm-lock.yaml)
+
+Full license text: LICENSE

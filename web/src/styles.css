@@ -1,0 +1,142 @@
+:root {
+  color-scheme: dark;
+  --td-pink: #f472b6;
+  --td-pink-soft: #f9a8d4;
+  --td-pink-deep: #db2777;
+  --td-pink-ink: #500724;
+  --td-bg: #101014;
+  --td-panel: #18181c;
+}
+
+html,
+body,
+#app {
+  margin: 0;
+  height: 100%;
+  max-width: 100%;
+  overflow: hidden;
+  background: var(--td-bg);
+  font-family: "SF Pro Text", "PingFang SC", "Noto Sans SC", system-ui, sans-serif;
+}
+
+a {
+  color: inherit;
+}
+
+.page {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+.list-page {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.list-page.pinned {
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  padding: 20px 28px 32px;
+  box-sizing: border-box;
+}
+.list-page.pinned > .toolbar,
+.list-page.pinned > .pager,
+.list-page.pinned > .n-alert,
+.list-page.pinned > .n-card,
+.list-page.pinned > .composer {
+  flex-shrink: 0;
+}
+.list-page.pinned > .table-wrap {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+  display: flex;
+  flex-direction: column;
+}
+
+.page :deep(.n-space),
+.page :deep(.n-space-item),
+.page :deep(.n-card),
+.page :deep(.n-form),
+.page :deep(.n-spin-content) {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.page :deep(.n-card),
+.page :deep(.n-form),
+.page :deep(.n-spin-content) {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  width: 100%;
+}
+
+.toolbar-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.toolbar-actions,
+.form-actions,
+.pager {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  justify-content: flex-end;
+  margin-left: auto;
+}
+
+.form-actions {
+  width: 100%;
+  margin-top: 4px;
+}
+
+.pager {
+  width: 100%;
+}
+
+.table-wrap {
+  width: 100%;
+  max-width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-x: contain;
+}
+
+@media (max-width: 1000px) {
+  .toolbar-filters {
+    width: 100%;
+  }
+
+  .toolbar-filters > .n-input,
+  .toolbar-filters > .n-select {
+    flex: 1 1 140px;
+  }
+
+  .toolbar-actions {
+    width: 100%;
+    justify-content: flex-end;
+  }
+
+  .n-pagination {
+    flex-wrap: wrap;
+    row-gap: 8px;
+  }
+}
