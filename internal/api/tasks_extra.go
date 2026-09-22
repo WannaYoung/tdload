@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"tdload/internal/db"
 )
@@ -48,7 +49,37 @@ func (s *Server) handleListTaskItemsByKind(w http.ResponseWriter, r *http.Reques
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeOK(w, map[string]any{"items": taskItemViews(items), "total": total, "page": page, "pageSize": pageSize})
+	doneCount, _ := s.DB.TaskItemKindDoneCount(r.Context(), kind)
+	writeOK(w, map[string]any{
+		"items": taskItemViews(items), "total": total, "doneCount": doneCount,
+		"page": page, "pageSize": pageSize,
+	})
+}
+
+func (s *Server) handleDeleteTaskItem(w http.ResponseWriter, r *http.Request) {
+	id, err := pathID(r, "itemId")
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "无效 id")
+		return
+	}
+	if err := s.DB.DeleteTaskItem(r.Context(), id); err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeOK(w, map[string]any{"ok": true})
+}
+
+func (s *Server) handleClearCompletedItems(w http.ResponseWriter, r *http.Request) {
+	kind := r.URL.Query().Get("kind")
+	if kind == "" {
+		kind = "message"
+	}
+	n, err := s.DB.ClearCompletedTaskItemsByKind(r.Context(), kind)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeOK(w, map[string]any{"ok": true, "cleared": n})
 }
 
 func (s *Server) handleResumeTask(w http.ResponseWriter, r *http.Request) {
@@ -106,9 +137,36 @@ func taskItemViews(items []db.TaskItem) []map[string]any {
 			"id": it.ID, "taskId": it.TaskID, "chatId": it.ChatID, "messageId": it.MessageID,
 			"fileName": it.FileName, "size": it.Size, "status": it.Status,
 			"localPath": it.LocalPath, "error": it.Error,
+			"chatTitle": it.ChatTitle,
+			"mediaKind": mediaKindLabel(it.Mime, it.FileName),
 		})
 	}
 	return out
+}
+
+func mediaKindLabel(mime, fileName string) string {
+	lower := strings.ToLower(mime + " " + fileName)
+	switch {
+	case strings.HasPrefix(mime, "image/"),
+		strings.HasSuffix(lower, ".jpg"), strings.HasSuffix(lower, ".jpeg"),
+		strings.HasSuffix(lower, ".png"), strings.HasSuffix(lower, ".webp"),
+		strings.HasSuffix(lower, ".gif"), strings.HasSuffix(lower, ".bmp"):
+		return "图片"
+	case strings.HasPrefix(mime, "video/"),
+		strings.HasSuffix(lower, ".mp4"), strings.HasSuffix(lower, ".mkv"),
+		strings.HasSuffix(lower, ".mov"), strings.HasSuffix(lower, ".webm"),
+		strings.HasSuffix(lower, ".avi"):
+		return "视频"
+	case strings.HasPrefix(mime, "audio/"),
+		strings.HasSuffix(lower, ".mp3"), strings.HasSuffix(lower, ".m4a"),
+		strings.HasSuffix(lower, ".ogg"), strings.HasSuffix(lower, ".flac"):
+		return "音频"
+	default:
+		if fileName == "" {
+			return "—"
+		}
+		return "文件"
+	}
 }
 
 func taskViewEnriched(s *Server, r *http.Request, t *db.Task) map[string]any {
@@ -121,12 +179,19 @@ func taskViewEnriched(s *Server, r *http.Request, t *db.Task) map[string]any {
 			v["progressDone"] = counts.Done + counts.Skipped
 			v["progressTotal"] = counts.Pending + counts.Downloading + counts.Done + counts.Skipped + counts.Failed
 		}
-	default:
-		if t.Source == "saved_all" {
-			v["kind"] = "saved"
-		} else {
-			v["kind"] = "message"
+	case "saved_all":
+		v["kind"] = "saved"
+		if counts, err := s.DB.TaskItemCounts(r.Context(), t.ID); err == nil {
+			total := counts.Pending + counts.Downloading + counts.Done + counts.Skipped + counts.Failed
+			if total == 0 {
+				total = t.TotalFiles
+			}
+			v["itemCounts"] = counts
+			v["progressDone"] = counts.Done + counts.Skipped
+			v["progressTotal"] = total
 		}
+	default:
+		v["kind"] = "message"
 	}
 	var opt map[string]any
 	_ = json.Unmarshal([]byte(t.OptionsJSON), &opt)

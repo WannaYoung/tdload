@@ -23,7 +23,7 @@ func (s *Server) handleListChannels(w http.ResponseWriter, r *http.Request) {
 		page = 1
 	}
 	if pageSize <= 0 {
-		pageSize = 50
+		pageSize = 20
 	}
 	_ = s.DB.RefreshDialogDownloadCounts(r.Context(), db.DefaultTGAccountID)
 	items, total, err := s.DB.ListTGDialogs(r.Context(), db.DefaultTGAccountID, pageSize, (page-1)*pageSize)

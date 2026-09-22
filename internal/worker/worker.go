@@ -170,18 +170,19 @@ func (w *Worker) runOne(parent context.Context, id int64) {
 		}
 		rows.Close()
 		opt := w.downloadOpts(id, tg.FavoritesFolderName)
+		baseOnItem := opt.OnItem
+		opt.OnItem = func(chatID int64, messageID int, status, fileName, localPath, errMsg string) {
+			if baseOnItem != nil {
+				baseOnItem(chatID, messageID, status, fileName, localPath, errMsg)
+			}
+			w.publishTaskCounts(id, "saved")
+		}
 		opt.OnProgress = func(doneFiles, totalFiles int, fileName string) {
-			bg := context.Background()
-			_ = w.DB.UpdateTaskProgress(bg, id, doneFiles, len(ids), 0, 0, 0)
-			w.publishItemProgress(id, favID, 0, "downloading")
-			w.Hub.Publish(progress.Event{
-				Type: "task_progress", TaskID: id, Phase: "downloading", Status: "running",
-				Done: doneFiles, Total: len(ids), Title: fileName,
-			})
+			w.publishTaskCounts(id, "saved")
 		}
 		err = w.TG.DownloadSaved(ctx, opt, favID, ids)
 	case "chat_batch", "chat_continue", "chat_range":
-		err = fmt.Errorf("频道批量下载 Worker 开发中，请先使用消息链接下载")
+		err = w.runChatTask(ctx, task)
 	default:
 		opt := w.downloadOpts(id, "")
 		opt.URLs = task.URLs
@@ -226,7 +227,32 @@ func (w *Worker) runOne(parent context.Context, id int64) {
 	if final != nil {
 		doneFiles, totalFiles = final.DoneFiles, final.TotalFiles
 	}
-	if doneFiles == 0 {
+	// 频道任务可能仅跳过/无新媒体，以 item 计数为准
+	if task.Source == "chat_batch" || task.Source == "chat_continue" || task.Source == "chat_range" {
+		if counts, e := w.DB.TaskItemCounts(context.Background(), id); e == nil {
+			totalFiles = counts.Pending + counts.Downloading + counts.Done + counts.Skipped + counts.Failed
+			doneFiles = counts.Done + counts.Skipped
+			_ = w.DB.UpdateTaskProgress(context.Background(), id, doneFiles, totalFiles, 0, 0, 0)
+		}
+		if totalFiles == 0 {
+			_ = w.DB.UpdateTaskStatus(context.Background(), id, "done", "没有需要下载的媒体")
+			_ = w.DB.AddTaskLog(context.Background(), id, "info", "没有需要下载的媒体")
+			w.Hub.Publish(progress.Event{Type: "task_progress", Kind: "channel", TaskID: id, Status: "done", Phase: "done", Done: 0, Total: 0})
+			slog.Info("task done (empty)", "id", id)
+			return
+		}
+		if doneFiles == 0 {
+			msg := "全部失败"
+			if counts, e := w.DB.TaskItemCounts(context.Background(), id); e == nil && counts.Failed > 0 {
+				msg = fmt.Sprintf("全部失败（%d）", counts.Failed)
+			}
+			_ = w.DB.UpdateTaskStatus(context.Background(), id, "failed", msg)
+			_ = w.DB.AddTaskLog(context.Background(), id, "error", msg)
+			w.Hub.Publish(progress.Event{Type: "task_progress", Kind: "channel", TaskID: id, Status: "failed", Phase: "failed", Error: msg, Done: 0, Total: totalFiles})
+			slog.Error("task failed", "id", id, "err", msg)
+			return
+		}
+	} else if doneFiles == 0 {
 		msg := "未写入任何文件"
 		_ = w.DB.UpdateTaskStatus(context.Background(), id, "failed", msg)
 		_ = w.DB.AddTaskLog(context.Background(), id, "error", msg)

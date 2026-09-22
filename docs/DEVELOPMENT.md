@@ -165,6 +165,7 @@ skip_same: true     # --skip-same
 group_album: true   # --group
 rewrite_ext: false  # --rewrite-ext
 takeout: false      # --takeout（大批量更友好）
+no_image: false     # 界面无图模式（资源库预览占位）
 template: "{{ .DialogID }}_{{ .MessageID }}_{{ .FileName }}"
 
 proxy: ""           # 例: socks5://127.0.0.1:1080
@@ -419,9 +420,9 @@ Telegram 页点「刷新」后写入；频道页只读此表（必要时后台�
 | Telegram 刷新 + 计数 | ✅ `/api/tg/sync`、`/api/tg/summary` + Telegram 页 |
 | 频道列表与统计 | ✅ `tg_dialogs` + `/api/channels` + 频道页 |
 | 任务三 Tab + 分 Tab 列表/分页 | ✅ 前端三 Tab；message/saved 走 `/api/tasks/items` 50 条；channel 任务 20 条 |
-| 频道任务：总进度 + 状态计数 + 重试失败 | ⚠️ API/前端已有；**Worker 频道批量未实现** |
+| 频道任务：总进度 + 状态计数 + 重试失败 | ✅ Worker + SSE `task_progress` + itemCounts |
 | 收藏下载 + `我的收藏/` | ✅ `saved_all` Worker + 目录 |
-| 频道批量 / 续下 / 起止 id | ⚠️ 可入队；Worker 返回「开发中」 |
+| 频道批量 / 续下 / 起止 id | ✅ `chat_batch` / `chat_continue` |
 | 跳过已下载 | ✅ |
 | 资源库：频道下拉、图/视频预览筛选 | ✅ 基础版 |
 | 监听 | 占位 |
@@ -928,7 +929,7 @@ services:
 | `internal/api` | REST 路由 | 一期基础已通 |
 | `internal/static` | SPA 静态托管 | 已完成 |
 | `internal/tg` | Telegram 登录与 client | **M1 验证码登录已完成** |
-| `internal/downloader` + `worker` + `progress` | tdl 下载与 SSE | 待 M2 |
+| `internal/downloader` + `worker` + `progress` | tdl 下载与 SSE | **M2 + M3.6 频道批量已完成** |
 | `internal/watcher` | 频道监听 | 待 M5 |
 | `web` 壳 | 深色 + 粉色高亮、宽窄屏布局、@vicons/ionicons5 | 已完成壳 |
 | Docker | 多架构镜像 | 待 M4 |
@@ -979,7 +980,7 @@ services:
 - [x] `POST /api/tg/sync`、`GET /api/tg/summary`
 - [x] `GET /api/channels`（含已下载数、最后已下 message id）
 - [x] Worker：`source=saved_all`（输出 `我的收藏/`）
-- [ ] Worker：`chat_batch` / `chat_continue`（频道历史扫描 + itemCounts 实时聚合）
+- [x] Worker：`chat_batch` / `chat_continue`（频道历史扫描 + itemCounts 实时聚合）
 - [x] 收藏 `media_index` 使用 **self user id** 作为 `chat_id`（`tg.FavoritesChatID`）
 - [x] 任务 API：`kind` 分页、`itemCounts`、`/resume` `/cancel` `/retry-failed`、`/tasks/items`
 - [x] 资源库 API：`/library/filters`、chat / mediaType、文件流预览
@@ -989,15 +990,14 @@ services:
 - [x] 侧栏：「频道」+「资源库」
 - [x] Telegram 页：同步 + 计数
 - [x] `ChannelsView.vue`
-- [x] `TasksView.vue`：三 Tab（频道 Worker 完成前显示提示）
+- [x] `TasksView.vue`：三 Tab（频道批量已接通）
 - [x] `LibraryView.vue`：筛选 + 图/视频预览
 
-### M3.6 — 频道批量 Worker（下一步）
+### M3.6 — 频道批量 Worker（已完成）
 
-- [ ] `internal/tg`：按 `chat_id` 拉历史、按范围/续下生成 jobs
-- [ ] Worker 更新 `task_items` 并仅推送 **task_progress + itemCounts**
-- [ ] 频道 Tab 去掉「开发中」提示
-
+- [x] `internal/tg`：按 `chat_id` 拉历史、按范围/续下生成 jobs
+- [x] Worker 更新 `task_items` 并仅推送 **task_progress + itemCounts**
+- [x] 频道 Tab 去掉「开发中」提示
 ### M4 — Docker
 
 - [ ] 多阶段 Dockerfile
@@ -1058,15 +1058,15 @@ services:
 
 ## 18. 下一步
 
-**当前：** M0、M1（验证码登录）、M2（链接下载 + Worker + SSE）、M3 壳已落地；**产品与目标态偏差见 §7.3**。
+**当前：** M0–M3.5 与 **M3.6 频道批量 Worker** 已落地。
 
 建议顺序：
 
 1. ~~M1 Telegram 登录~~ ✅（QR 可选）
 2. ~~M2 链接下载闭环~~ ✅
-3. ~~**M3.5 产品对齐**~~ — 主体已完成（见 §7.3）
-4. **M3.6 频道批量 Worker** — `chat_batch` / `chat_continue`
+3. ~~**M3.5 产品对齐**~~ ✅
+4. ~~**M3.6 频道批量 Worker**~~ ✅（`chat_batch` / `chat_continue`）
 5. **M4** Docker 多架构
 6. **M5** 监听自动入队（复用 `chat_continue` / 去重）
 
-实现频道批量时可对照 xtools 的 Browse 交互（分类切换、批量勾选、入队），但数据源为 Telegram 对话而非站点分类。
+实现监听时可对照 xtools 的 Browse 交互（分类切换、批量勾选、入队），但数据源为 Telegram 对话而非站点分类。

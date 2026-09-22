@@ -59,13 +59,15 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE /api/tasks/{id}", s.withAuth(s.handleDeleteTask))
 	mux.HandleFunc("DELETE /api/tasks/completed", s.withAuth(s.handleClearCompleted))
 	mux.HandleFunc("GET /api/tasks/items", s.withAuth(s.handleListTaskItemsByKind))
+	mux.HandleFunc("DELETE /api/tasks/items/completed", s.withAuth(s.handleClearCompletedItems))
+	mux.HandleFunc("DELETE /api/tasks/items/{itemId}", s.withAuth(s.handleDeleteTaskItem))
 	mux.HandleFunc("GET /api/tasks/{id}/items", s.withAuth(s.handleListTaskItems))
 	mux.HandleFunc("POST /api/tasks/{id}/resume", s.withAuth(s.handleResumeTask))
 	mux.HandleFunc("POST /api/tasks/{id}/cancel", s.withAuth(s.handleCancelTask))
 	mux.HandleFunc("POST /api/tasks/{id}/retry-failed", s.withAuth(s.handleRetryFailedTask))
 	mux.HandleFunc("GET /api/library/filters", s.withAuth(s.handleLibraryFilters))
 	mux.HandleFunc("GET /api/library", s.withAuth(s.handleListLibrary))
-	mux.HandleFunc("GET /api/library/{id}/file", s.withAuth(s.handleLibraryFile))
+	mux.HandleFunc("GET /api/library/{id}/file", s.withFileAuth(s.handleLibraryFile))
 	mux.HandleFunc("GET /api/events", s.withSSEAuth(s.handleEvents))
 }
 
@@ -142,22 +144,44 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	tgTotal, tgActive, tgExpired, _ := s.DB.TGAccountStatus(r.Context())
+	diskUsed, diskAvail, diskTotal := diskUsage(s.Cfg.DownloadDir)
+
+	dialogCount, _ := s.DB.DialogCount(r.Context(), db.DefaultTGAccountID)
+	savedCount, _ := s.DB.SavedMessageCount(r.Context(), db.DefaultTGAccountID)
+	favID := int64(0)
+	if acc, _ := s.DB.GetTGAccount(r.Context(), db.DefaultTGAccountID); acc != nil {
+		favID = acc.UserID
+	}
+	savedDownloaded := 0
+	if favID > 0 {
+		savedDownloaded, _ = s.DB.SavedDownloadedCount(r.Context(), favID)
+	}
+	dialogsAt, savedAt, _ := s.DB.LastSyncedAt(r.Context(), db.DefaultTGAccountID)
+
 	writeOK(w, map[string]any{
-		"tgAccounts":     tgTotal,
-		"tgActive":       tgActive,
-		"tgExpired":      tgExpired,
-		"tasksQueued":    queued,
-		"tasksRunning":   running,
-		"tasksFailed":    failed,
-		"tasksPaused":    paused,
-		"tasksDone":      done,
-		"media":          media,
-		"downloadDir":    s.Cfg.DownloadDir,
-		"diskUsed":       0,
-		"diskAvailable":  0,
-		"diskTotal":      0,
-		"tgConfigured":   s.Cfg.AppID > 0 && s.Cfg.AppHash != "",
-		"watchEnabled":   false,
+		"tgAccounts":       tgTotal,
+		"tgActive":         tgActive,
+		"tgExpired":        tgExpired,
+		"tasksQueued":      queued,
+		"tasksRunning":     running,
+		"tasksFailed":      failed,
+		"tasksPaused":      paused,
+		"tasksDone":        done,
+		"media":            media,
+		"downloadDir":      s.Cfg.DownloadDir,
+		"diskUsed":         diskUsed,
+		"diskAvailable":    diskAvail,
+		"diskTotal":        diskTotal,
+		"tgConfigured":     s.Cfg.AppID > 0 && s.Cfg.AppHash != "",
+		"watchEnabled":     false,
+		"dialogCount":      dialogCount,
+		"savedCount":       savedCount,
+		"savedDownloaded":  savedDownloaded,
+		"dialogsSyncedAt":  dialogsAt,
+		"savedSyncedAt":    savedAt,
+		"proxyConfigured":  strings.TrimSpace(s.Cfg.Proxy) != "",
+		"threads":          s.Cfg.Threads,
+		"concurrency":      s.Cfg.Concurrency,
 	})
 }
 
@@ -188,12 +212,14 @@ func settingsView(c *config.Config) map[string]any {
 		"sessionDir":   c.SessionDir,
 		"appId":        c.AppID,
 		"appHashSet":   c.AppHash != "",
+		"usingDesktopPreset": c.AppID == config.DesktopAppID && c.AppHash == config.DesktopAppHash,
 		"threads":      c.Threads,
 		"concurrency":  c.Concurrency,
 		"skipSame":     c.SkipSame,
 		"groupAlbum":   c.GroupAlbum,
 		"rewriteExt":   c.RewriteExt,
 		"takeout":      c.Takeout,
+		"noImage":      c.NoImage,
 		"template":     c.Template,
 		"proxy":        c.Proxy,
 	}
@@ -229,6 +255,9 @@ func applySettings(c *config.Config, body map[string]any) {
 	}
 	if v, ok := body["takeout"].(bool); ok {
 		c.Takeout = v
+	}
+	if v, ok := body["noImage"].(bool); ok {
+		c.NoImage = v
 	}
 	if v, ok := asInt(body["appId"]); ok && v > 0 {
 		c.AppID = v

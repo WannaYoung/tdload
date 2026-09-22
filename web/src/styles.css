@@ -44,9 +44,12 @@ a {
 }
 .list-page.pinned > .toolbar,
 .list-page.pinned > .pager,
+.list-page.pinned > .filters,
 .list-page.pinned > .n-alert,
 .list-page.pinned > .n-card,
-.list-page.pinned > .composer {
+.list-page.pinned > .composer,
+.list-page.pinned > .channel-form,
+.list-page.pinned > .list-meta {
   flex-shrink: 0;
 }
 .list-page.pinned > .table-wrap {

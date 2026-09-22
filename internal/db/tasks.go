@@ -38,6 +38,8 @@ type TaskItem struct {
 	Status    string
 	LocalPath string
 	Error     string
+	ChatTitle string // join 填充
+	Mime      string // join 填充
 }
 
 func (d *DB) CreateTask(ctx context.Context, source, title, optionsJSON string, totalFiles int) (*Task, error) {
@@ -327,8 +329,17 @@ func (d *DB) ListTaskItemsByKind(ctx context.Context, kind string, limit, offset
 		return nil, 0, err
 	}
 	q, args := inClause(`
-SELECT ti.id, ti.task_id, ti.chat_id, ti.message_id, ti.file_name, ti.size, ti.status, ti.local_path, ti.error
-FROM task_items ti JOIN tasks t ON t.id=ti.task_id WHERE t.source IN (`, sources)
+SELECT ti.id, ti.task_id, ti.chat_id, ti.message_id, ti.file_name, ti.size, ti.status, ti.local_path, ti.error,
+  COALESCE(NULLIF(d.title, ''), CAST(ti.chat_id AS TEXT)),
+  COALESCE((
+    SELECT mime FROM media_index m
+    WHERE m.chat_id = ti.chat_id AND m.message_id = ti.message_id
+    ORDER BY m.id DESC LIMIT 1
+  ), '')
+FROM task_items ti
+JOIN tasks t ON t.id=ti.task_id
+LEFT JOIN tg_dialogs d ON d.chat_id = ti.chat_id AND d.tg_account_id = 1
+WHERE t.source IN (`, sources)
 	args = append(args, limit, offset)
 	rows, err := d.SQL.QueryContext(ctx, q+` ORDER BY ti.id DESC LIMIT ? OFFSET ?`, args...)
 	if err != nil {
@@ -338,12 +349,46 @@ FROM task_items ti JOIN tasks t ON t.id=ti.task_id WHERE t.source IN (`, sources
 	var out []TaskItem
 	for rows.Next() {
 		var it TaskItem
-		if err := rows.Scan(&it.ID, &it.TaskID, &it.ChatID, &it.MessageID, &it.FileName, &it.Size, &it.Status, &it.LocalPath, &it.Error); err != nil {
+		if err := rows.Scan(&it.ID, &it.TaskID, &it.ChatID, &it.MessageID, &it.FileName, &it.Size, &it.Status, &it.LocalPath, &it.Error, &it.ChatTitle, &it.Mime); err != nil {
 			return nil, 0, err
 		}
 		out = append(out, it)
 	}
 	return out, total, rows.Err()
+}
+
+func (d *DB) TaskItemKindDoneCount(ctx context.Context, kind string) (int, error) {
+	sources := sourcesForKind(kind)
+	if len(sources) == 0 {
+		return 0, fmt.Errorf("unknown kind")
+	}
+	q, args := inClause(`
+SELECT COUNT(1) FROM task_items ti JOIN tasks t ON t.id=ti.task_id
+WHERE ti.status IN ('done','skipped') AND t.source IN (`, sources)
+	var n int
+	err := d.SQL.QueryRowContext(ctx, q, args...).Scan(&n)
+	return n, err
+}
+
+func (d *DB) DeleteTaskItem(ctx context.Context, id int64) error {
+	_, err := d.SQL.ExecContext(ctx, `DELETE FROM task_items WHERE id=?`, id)
+	return err
+}
+
+func (d *DB) ClearCompletedTaskItemsByKind(ctx context.Context, kind string) (int64, error) {
+	sources := sourcesForKind(kind)
+	if len(sources) == 0 {
+		return 0, fmt.Errorf("unknown kind")
+	}
+	q, args := inClause(`
+DELETE FROM task_items WHERE status IN ('done','skipped') AND task_id IN (
+  SELECT id FROM tasks WHERE source IN (`, sources)
+	q += `)`
+	res, err := d.SQL.ExecContext(ctx, q, args...)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
 }
 
 func (d *DB) RetryFailedTaskItems(ctx context.Context, taskID int64) (int64, error) {

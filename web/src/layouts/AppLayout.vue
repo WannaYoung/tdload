@@ -26,8 +26,9 @@ import {
 } from "@vicons/ionicons5";
 import { useAuthStore } from "../stores/auth";
 import { useMobile } from "../composables/useMobile";
+import { applyNoImageSetting } from "../composables/useNoImage";
 import { api } from "../api/http";
-import type { DashboardStats } from "../api/types";
+import type { DashboardStats, Settings } from "../api/types";
 
 const BADGE_STYLE =
   "display:inline-flex;align-items:center;justify-content:center;min-width:18px;height:18px;padding:0 5px;border-radius:9px;background:#f472b6;color:#500724;font-size:11px;font-weight:600;line-height:1;flex-shrink:0;";
@@ -150,6 +151,9 @@ async function refreshActiveTaskCount() {
 onMounted(() => {
   void auth.fetchMe();
   void refreshActiveTaskCount();
+  void api<Settings>("/api/settings")
+    .then((s) => applyNoImageSetting(!!s.noImage))
+    .catch(() => undefined);
   taskCountTimer = window.setInterval(() => {
     void refreshActiveTaskCount();
   }, 5000);

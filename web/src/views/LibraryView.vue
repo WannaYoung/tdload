@@ -1,18 +1,13 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
-import {
-  NButton,
-  NEmpty,
-  NImage,
-  NSelect,
-  NSpin,
-  useMessage,
-} from "naive-ui";
-import { api, getToken } from "../api/http";
+import { onMounted, ref } from "vue";
+import { NButton, NEmpty, NSelect, NSpin, useMessage } from "naive-ui";
+import { api, ensureTicket, getToken } from "../api/http";
 import type { LibraryItem } from "../api/types";
+import { useNoImage, withImagePlaceholder } from "../composables/useNoImage";
 
 defineOptions({ name: "LibraryView" });
 
+const { noImage } = useNoImage();
 const message = useMessage();
 const loading = ref(false);
 const items = ref<LibraryItem[]>([]);
@@ -21,6 +16,8 @@ const page = ref(1);
 const pageSize = 50;
 const chat = ref<string>("all");
 const mediaType = ref<string>("all");
+const mediaToken = ref("");
+const broken = ref<Record<number, boolean>>({});
 const filterOptions = ref<{ label: string; value: string }[]>([
   { label: "全部频道", value: "all" },
   { label: "我的收藏", value: "saved" },
@@ -33,8 +30,12 @@ const mediaOptions = [
 ];
 
 function fileUrl(id: number) {
-  const t = getToken();
+  const t = mediaToken.value || getToken();
   return t ? `/api/library/${id}/file?token=${encodeURIComponent(t)}` : "";
+}
+
+function thumbSrc(it: LibraryItem) {
+  return withImagePlaceholder(fileUrl(it.id));
 }
 
 async function loadFilters() {
@@ -47,7 +48,7 @@ async function loadFilters() {
       if (it.key === "saved") {
         opts.push({ label: "我的收藏", value: "saved" });
       } else {
-        opts.push({ label: it.title, value: String(it.chatId) });
+        opts.push({ label: it.title || String(it.chatId), value: String(it.chatId) });
       }
     }
     filterOptions.value = opts;
@@ -58,7 +59,10 @@ async function loadFilters() {
 
 async function load() {
   loading.value = true;
+  broken.value = {};
   try {
+    const ticket = await ensureTicket("media");
+    if (ticket) mediaToken.value = ticket;
     const params = new URLSearchParams({
       page: String(page.value),
       pageSize: String(pageSize),
@@ -75,9 +79,9 @@ async function load() {
   }
 }
 
-const previewItems = computed(() =>
-  items.value.filter((i) => i.mediaKind === "image" || i.mediaKind === "video"),
-);
+function onImgError(id: number) {
+  broken.value = { ...broken.value, [id]: true };
+}
 
 onMounted(() => {
   void loadFilters();
@@ -88,44 +92,54 @@ onMounted(() => {
 <template>
   <div class="page list-page pinned">
     <div class="toolbar">
-      <div>
-        <h2>资源库</h2>
-        <p class="muted">按频道筛选；「我的收藏」在频道列表最前</p>
-      </div>
+      <h2>资源库</h2>
       <n-button quaternary :loading="loading" @click="load">刷新</n-button>
     </div>
 
     <div class="filters">
-      <n-select v-model:value="chat" :options="filterOptions" style="min-width: 200px" @update:value="page = 1; load()" />
+      <n-select
+        v-model:value="chat"
+        :options="filterOptions"
+        class="filter-chat"
+        @update:value="
+          page = 1;
+          load();
+        "
+      />
       <n-select
         v-model:value="mediaType"
         :options="mediaOptions"
-        style="width: 120px"
-        @update:value="page = 1; load()"
+        class="filter-type"
+        @update:value="
+          page = 1;
+          load();
+        "
       />
     </div>
 
-    <n-spin :show="loading">
-      <n-empty v-if="!items.length && !loading" description="暂无资源，先完成下载" />
-      <div v-else class="grid">
-        <div v-for="it in previewItems" :key="it.id" class="card">
-          <n-image v-if="it.mediaKind === 'image'" :src="fileUrl(it.id)" object-fit="cover" class="thumb" />
-          <video v-else-if="it.mediaKind === 'video'" class="thumb" controls :src="fileUrl(it.id)" />
-          <div class="cap">{{ it.fileName }}</div>
+    <div class="table-wrap">
+      <n-spin :show="loading" class="spin-fill">
+        <n-empty v-if="!items.length && !loading" description="暂无可用文件" />
+        <div v-else class="grid">
+          <div v-for="it in items" :key="`${it.id}-${noImage ? 'n' : 'i'}`" class="card">
+            <template v-if="it.mediaKind === 'image' && !broken[it.id]">
+              <img class="thumb" :src="thumbSrc(it)" :alt="it.fileName" @error="onImgError(it.id)" />
+            </template>
+            <template v-else-if="it.mediaKind === 'video'">
+              <video class="thumb" controls preload="metadata" :src="fileUrl(it.id)" />
+            </template>
+            <div v-else class="thumb placeholder">无预览</div>
+            <div class="cap" :title="it.fileName">{{ it.fileName }}</div>
+          </div>
         </div>
-      </div>
-      <ul v-if="items.length" class="list">
-        <li v-for="it in items" :key="'l-' + it.id">
-          <span class="kind">{{ it.mediaKind }}</span> {{ it.fileName }}
-          <span class="path">{{ it.localPath }}</span>
-        </li>
-      </ul>
-      <div v-if="total > pageSize" class="pager">
-        <n-button size="small" :disabled="page <= 1" @click="page--; load()">上一页</n-button>
-        <span>{{ page }} / {{ Math.ceil(total / pageSize) }}</span>
-        <n-button size="small" :disabled="page * pageSize >= total" @click="page++; load()">下一页</n-button>
-      </div>
-    </n-spin>
+      </n-spin>
+    </div>
+
+    <div v-if="total > pageSize" class="pager">
+      <n-button size="small" :disabled="page <= 1" @click="page--; load()">上一页</n-button>
+      <span>{{ page }} / {{ Math.max(1, Math.ceil(total / pageSize)) }}</span>
+      <n-button size="small" :disabled="page * pageSize >= total" @click="page++; load()">下一页</n-button>
+    </div>
   </div>
 </template>
 
@@ -134,22 +148,37 @@ h2 {
   margin: 0;
   font-size: 22px;
 }
-.muted {
-  margin: 6px 0 0;
-  color: rgba(255, 255, 255, 0.45);
-  font-size: 13px;
+.toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: nowrap;
 }
 .filters {
   display: flex;
+  flex-direction: row;
+  flex-wrap: nowrap;
+  align-items: center;
   gap: 10px;
-  margin-bottom: 16px;
-  flex-wrap: wrap;
+}
+.filter-chat {
+  flex: 1 1 auto;
+  min-width: 160px;
+  max-width: 360px;
+}
+.filter-type {
+  flex: 0 0 120px;
+  width: 120px;
+}
+.spin-fill {
+  min-height: 120px;
 }
 .grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
   gap: 12px;
-  margin-bottom: 20px;
+  padding-bottom: 8px;
 }
 .card {
   background: #18181c;
@@ -164,6 +193,13 @@ h2 {
   object-fit: cover;
   background: #101014;
 }
+.thumb.placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: rgba(255, 255, 255, 0.35);
+  font-size: 12px;
+}
 .cap {
   padding: 8px;
   font-size: 11px;
@@ -172,31 +208,11 @@ h2 {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.list {
-  list-style: none;
-  padding: 0;
-  margin: 0;
-  font-size: 13px;
-}
-.list li {
-  padding: 8px 0;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
-}
-.kind {
-  color: #f9a8d4;
-  margin-right: 8px;
-}
-.path {
-  display: block;
-  font-size: 11px;
-  color: rgba(255, 255, 255, 0.35);
-}
 .pager {
   display: flex;
   justify-content: flex-end;
   align-items: center;
   gap: 12px;
-  margin-top: 16px;
   font-size: 13px;
 }
 </style>

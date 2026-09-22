@@ -31,6 +31,7 @@ type Config struct {
 	GroupAlbum   bool   `yaml:"group_album"`
 	RewriteExt   bool   `yaml:"rewrite_ext"`
 	Takeout      bool   `yaml:"takeout"`
+	NoImage      bool   `yaml:"no_image"` // 界面：资源库等不加载预览图
 	Template     string `yaml:"template"`
 	Proxy        string `yaml:"proxy"`
 	JWTSecret    string `yaml:"jwt_secret"`

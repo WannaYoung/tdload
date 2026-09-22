@@ -3,7 +3,6 @@ package db
 import (
 	"context"
 	"database/sql"
-	"fmt"
 	"time"
 )
 
@@ -172,52 +171,65 @@ func (d *DB) MaxDownloadedMessageID(ctx context.Context, chatID int64) (int, err
 	return int(n.Int64), nil
 }
 
+func (d *DB) MaxTaskItemMessageID(ctx context.Context, taskID int64) (int, error) {
+	var n sql.NullInt64
+	err := d.SQL.QueryRowContext(ctx, `SELECT MAX(message_id) FROM task_items WHERE task_id=?`, taskID).Scan(&n)
+	if err != nil || !n.Valid {
+		return 0, err
+	}
+	return int(n.Int64), nil
+}
+
+func (d *DB) UpsertChatDownloadState(ctx context.Context, accountID, chatID int64, lastMessageID int) error {
+	now := time.Now().UTC().Format(time.RFC3339)
+	_, err := d.SQL.ExecContext(ctx, `
+INSERT INTO chat_download_state (tg_account_id, chat_id, last_downloaded_message_id, updated_at)
+VALUES (?, ?, ?, ?)
+ON CONFLICT(tg_account_id, chat_id) DO UPDATE SET
+  last_downloaded_message_id=CASE
+    WHEN excluded.last_downloaded_message_id > chat_download_state.last_downloaded_message_id
+    THEN excluded.last_downloaded_message_id
+    ELSE chat_download_state.last_downloaded_message_id
+  END,
+  updated_at=excluded.updated_at`,
+		accountID, chatID, lastMessageID, now)
+	return err
+}
+
 func (d *DB) LibraryChatFilters(ctx context.Context, accountID int64, favoritesChatID int64) ([]struct {
 	ChatID int64
 	Title  string
 }, error) {
+	// 单连接 SQLite：禁止在未关闭的 rows 上再 Query（会死锁）
 	rows, err := d.SQL.QueryContext(ctx, `
-SELECT chat_id, COUNT(1) AS c FROM media_index GROUP BY chat_id ORDER BY c DESC`)
+SELECT m.chat_id,
+       COALESCE(NULLIF(d.title, ''), CAST(m.chat_id AS TEXT)) AS title
+FROM (
+  SELECT chat_id, COUNT(1) AS c FROM media_index GROUP BY chat_id
+) m
+LEFT JOIN tg_dialogs d ON d.chat_id = m.chat_id AND d.tg_account_id = ?
+ORDER BY m.c DESC`, accountID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	type row struct {
-		ChatID int64
-		Title  string
-	}
-	var raw []row
-	for rows.Next() {
-		var chatID int64
-		var c int
-		if err := rows.Scan(&chatID, &c); err != nil {
-			return nil, err
-		}
-		title := ""
-		if chatID == favoritesChatID {
-			title = "我的收藏"
-		} else {
-			dlg, _ := d.GetTGDialog(ctx, accountID, chatID)
-			if dlg != nil {
-				title = dlg.Title
-			}
-			if title == "" {
-				title = formatChatID(chatID)
-			}
-		}
-		raw = append(raw, row{ChatID: chatID, Title: title})
-	}
 	out := make([]struct {
 		ChatID int64
 		Title  string
-	}, len(raw))
-	for i, r := range raw {
-		out[i].ChatID = r.ChatID
-		out[i].Title = r.Title
+	}, 0)
+	for rows.Next() {
+		var chatID int64
+		var title string
+		if err := rows.Scan(&chatID, &title); err != nil {
+			return nil, err
+		}
+		if chatID == favoritesChatID {
+			title = "我的收藏"
+		}
+		out = append(out, struct {
+			ChatID int64
+			Title  string
+		}{ChatID: chatID, Title: title})
 	}
 	return out, rows.Err()
-}
-
-func formatChatID(id int64) string {
-	return fmt.Sprintf("%d", id)
 }

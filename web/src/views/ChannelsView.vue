@@ -1,9 +1,19 @@
 <script setup lang="ts">
-import { onMounted, ref } from "vue";
-import { NButton, NDataTable, NEmpty, NSpin, useMessage, type DataTableColumns } from "naive-ui";
+import { h, onMounted, ref } from "vue";
+import { useRouter } from "vue-router";
+import {
+  NButton,
+  NDataTable,
+  NEmpty,
+  NSpin,
+  NTag,
+  useMessage,
+  type DataTableColumns,
+} from "naive-ui";
 import { api } from "../api/http";
 import type { ChannelRow } from "../api/types";
 
+const router = useRouter();
 const message = useMessage();
 const loading = ref(false);
 const page = ref(1);
@@ -11,29 +21,81 @@ const pageSize = 20;
 const total = ref(0);
 const rows = ref<ChannelRow[]>([]);
 
-const kindLabel: Record<string, string> = {
-  channel: "频道",
-  supergroup: "超级群",
-  group: "群",
+const kindMeta: Record<
+  string,
+  { label: string; color: { color: string; textColor: string; borderColor: string } }
+> = {
+  channel: {
+    label: "频道",
+    color: { color: "rgba(244, 114, 182, 0.16)", textColor: "#f9a8d4", borderColor: "transparent" },
+  },
+  supergroup: {
+    label: "超级群",
+    color: { color: "rgba(96, 165, 250, 0.16)", textColor: "#93c5fd", borderColor: "transparent" },
+  },
+  group: {
+    label: "群组",
+    color: { color: "rgba(251, 191, 36, 0.16)", textColor: "#fcd34d", borderColor: "transparent" },
+  },
 };
 
+function createTask(row: ChannelRow) {
+  void router.push({
+    name: "tasks",
+    query: { tab: "channel", chatId: String(row.chatId) },
+  });
+}
+
 const columns: DataTableColumns<ChannelRow> = [
-  { title: "名称", key: "title", ellipsis: { tooltip: true } },
+  {
+    title: "名称",
+    key: "title",
+    ellipsis: { tooltip: true },
+    render: (r) => {
+      const name = r.title || String(r.chatId);
+      const uname = r.username ? `@${r.username}` : "";
+      return h("div", { class: "name-cell" }, [
+        h("div", { class: "name-title" }, name),
+        uname ? h("div", { class: "name-sub" }, uname) : null,
+      ]);
+    },
+  },
   {
     title: "类型",
     key: "kind",
-    width: 88,
-    render: (r) => kindLabel[r.kind] || r.kind,
+    width: 100,
+    render: (r) => {
+      const meta = kindMeta[r.kind] || {
+        label: r.kind || "未知",
+        color: { color: "rgba(255,255,255,0.08)", textColor: "rgba(255,255,255,0.55)", borderColor: "transparent" },
+      };
+      return h(NTag, { size: "small", bordered: false, color: meta.color }, { default: () => meta.label });
+    },
   },
   {
-    title: "消息数",
-    key: "messageCount",
-    width: 88,
-    render: (r) => (r.messageCount >= 0 ? r.messageCount : "—"),
+    title: "最新消息",
+    key: "lastMessageId",
+    width: 110,
+    render: (r) => (r.lastMessageId > 0 ? String(r.lastMessageId) : "—"),
   },
-  { title: "已下载", key: "downloadedCount", width: 88 },
-  { title: "最新 msg", key: "lastMessageId", width: 96 },
-  { title: "已下到 msg", key: "lastDownloadedMessageId", width: 108 },
+  {
+    title: "已下载",
+    key: "downloadedCount",
+    width: 96,
+    render: (r) => String(r.downloadedCount ?? 0),
+  },
+  {
+    title: "操作",
+    key: "actions",
+    width: 110,
+    align: "right",
+    render: (r) =>
+      h(
+        NButton,
+        { size: "small", type: "primary", secondary: true, onClick: () => createTask(r) },
+        { default: () => "新增任务" },
+      ),
+  },
 ];
 
 async function load() {
@@ -99,5 +161,17 @@ onMounted(() => void load());
   justify-content: flex-end;
   font-size: 13px;
   color: rgba(255, 255, 255, 0.55);
+}
+:deep(.name-cell) {
+  min-width: 0;
+}
+:deep(.name-title) {
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.9);
+}
+:deep(.name-sub) {
+  margin-top: 2px;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.4);
 }
 </style>

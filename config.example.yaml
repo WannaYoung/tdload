@@ -18,6 +18,7 @@ skip_same: true
 group_album: true
 rewrite_ext: false
 takeout: false
+no_image: false      # 界面无图模式：资源库预览用占位图
 template: "{{ .DialogID }}_{{ .MessageID }}_{{ .FileName }}"
 
 proxy: ""

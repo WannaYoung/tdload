@@ -39,7 +39,7 @@ func (s *Server) handleCreateTasks(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		opt, _ := json.Marshal(map[string]any{"outSubdir": "我的收藏"})
-		task, err := s.DB.CreateTask(r.Context(), "saved_all", "收藏下载", string(opt), n)
+		task, err := s.DB.CreateTask(r.Context(), "saved_all", "收藏同步", string(opt), n)
 		if err != nil {
 			writeErr(w, http.StatusInternalServerError, err.Error())
 			return
@@ -50,18 +50,41 @@ func (s *Server) handleCreateTasks(w http.ResponseWriter, r *http.Request) {
 		writeOK(w, taskViewEnriched(s, r, task))
 		return
 	case "chat_batch", "chat_continue":
-		if body.ChatID == 0 && source == "chat_batch" {
+		if body.ChatID == 0 {
 			writeErr(w, http.StatusBadRequest, "请选择频道")
 			return
+		}
+		if source == "chat_batch" {
+			if body.FromMessageID <= 0 {
+				writeErr(w, http.StatusBadRequest, "请填写起始 message id")
+				return
+			}
+			if body.Count <= 0 {
+				body.Count = 50
+			}
 		}
 		opt, _ := json.Marshal(map[string]any{
 			"chatId": body.ChatID, "fromMessageId": body.FromMessageID, "count": body.Count,
 		})
 		title := body.Title
 		if title == "" {
-			title = "频道下载"
+			if d, _ := s.DB.GetTGDialog(r.Context(), db.DefaultTGAccountID, body.ChatID); d != nil && d.Title != "" {
+				if source == "chat_continue" {
+					title = d.Title + " · 续下"
+				} else {
+					title = fmt.Sprintf("%s · #%d×%d", d.Title, body.FromMessageID, body.Count)
+				}
+			} else if source == "chat_continue" {
+				title = "频道续下"
+			} else {
+				title = "频道批量"
+			}
 		}
-		task, err := s.DB.CreateTask(r.Context(), source, title, string(opt), body.Count)
+		totalHint := body.Count
+		if source == "chat_continue" {
+			totalHint = 0
+		}
+		task, err := s.DB.CreateTask(r.Context(), source, title, string(opt), totalHint)
 		if err != nil {
 			writeErr(w, http.StatusInternalServerError, err.Error())
 			return

@@ -12,7 +12,7 @@ import {
   useMessage,
 } from "naive-ui";
 import { api } from "../api/http";
-import type { Settings, TgStatus, TGSummary } from "../api/types";
+import type { TgStatus, TGSummary } from "../api/types";
 
 const message = useMessage();
 const dialog = useDialog();
@@ -23,7 +23,6 @@ const summary = ref<TGSummary | null>(null);
 const syncing = ref(false);
 const step = ref<"idle" | "code" | "password">("idle");
 const loginId = ref("");
-const showCredForm = ref(false);
 
 const form = reactive({
   phone: "",
@@ -31,12 +30,18 @@ const form = reactive({
   password: "",
 });
 
-const apiForm = reactive({
-  appId: "" as string,
-  appHash: "",
-});
-
 const loggedIn = computed(() => Boolean(status.value?.loggedIn));
+
+const syncedAtText = computed(() => {
+  const a = summary.value?.dialogsSyncedAt || "";
+  const b = summary.value?.savedSyncedAt || "";
+  const raw = [a, b].filter(Boolean).sort().at(-1) || "";
+  if (!raw) return "";
+  const d = new Date(raw);
+  if (Number.isNaN(d.getTime())) return raw;
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+});
 
 async function loadSummary() {
   try {
@@ -51,9 +56,6 @@ async function load() {
   try {
     status.value = await api<TgStatus>("/api/tg/status");
     await loadSummary();
-    const s = await api<Settings>("/api/settings");
-    apiForm.appId = s.appId ? String(s.appId) : "";
-    showCredForm.value = false;
   } catch (e) {
     message.error(e instanceof Error ? e.message : "加载失败");
   } finally {
@@ -75,29 +77,6 @@ async function syncAll() {
     message.error(e instanceof Error ? e.message : "同步失败");
   } finally {
     syncing.value = false;
-  }
-}
-
-async function saveAPI() {
-  const id = Number(apiForm.appId);
-  if (!id || !apiForm.appHash.trim()) {
-    message.warning("请填写 App ID 与 App Hash");
-    return;
-  }
-  busy.value = true;
-  try {
-    await api("/api/settings", {
-      method: "PUT",
-      body: JSON.stringify({ appId: id, appHash: apiForm.appHash.trim() }),
-    });
-    message.success("API 凭证已保存");
-    apiForm.appHash = "";
-    showCredForm.value = false;
-    await load();
-  } catch (e) {
-    message.error(e instanceof Error ? e.message : "保存失败");
-  } finally {
-    busy.value = false;
   }
 }
 
@@ -167,23 +146,10 @@ async function logout() {
     await api("/api/tg/logout", { method: "POST", body: "{}" });
     message.success("已退出");
     step.value = "idle";
+    summary.value = null;
     await load();
   } catch (e) {
     message.error(e instanceof Error ? e.message : "退出失败");
-  } finally {
-    busy.value = false;
-  }
-}
-
-async function useDesktopPreset() {
-  busy.value = true;
-  try {
-    await api("/api/tg/credentials/desktop", { method: "POST", body: "{}" });
-    message.success("已使用 Desktop 内置凭证，可直接登录");
-    showCredForm.value = false;
-    await load();
-  } catch (e) {
-    message.error(e instanceof Error ? e.message : "设置失败");
   } finally {
     busy.value = false;
   }
@@ -204,104 +170,83 @@ onMounted(() => void load());
 
     <n-spin :show="loading">
       <n-card size="small" class="block">
-        <h3>API 凭证</h3>
-        <n-alert v-if="!status?.configured" type="warning" style="margin-bottom: 12px">
-          尚未配置凭证。默认应已自动写入 Desktop 公开凭证，也可点下面按钮重新写入。
-        </n-alert>
-        <n-alert
-          v-else
-          :type="status?.usingDesktopPreset ? 'success' : 'info'"
-          style="margin-bottom: 12px"
-        >
-          {{
-            status?.usingDesktopPreset
-              ? "当前使用 Desktop 公开凭证（与 tdl 相同，可直接登录 / 发 Docker）"
-              : "当前使用自定义 API 凭证"
-          }}
-        </n-alert>
-        <div class="actions" style="margin-bottom: 12px">
-          <n-button
-            v-if="!status?.usingDesktopPreset"
-            type="primary"
-            :loading="busy"
-            @click="useDesktopPreset"
-          >
-            使用 Desktop 公开凭证
-          </n-button>
-          <n-button quaternary size="small" @click="showCredForm = !showCredForm">
-            {{ showCredForm ? "收起手动填写" : "改用自己的 api_id" }}
-          </n-button>
-        </div>
-        <p class="hint">
-          公开凭证来自 Telegram Desktop（api_id=2040）。若遇
-          <code>API_ID_PUBLISHED_FLOOD</code>，再换自己的凭证。
-        </p>
-        <template v-if="showCredForm">
-          <n-form label-placement="top">
-            <div class="row">
-              <n-form-item label="App ID">
-                <n-input v-model:value="apiForm.appId" placeholder="数字" />
-              </n-form-item>
-              <n-form-item label="App Hash">
-                <n-input
-                  v-model:value="apiForm.appHash"
-                  type="password"
-                  show-password-on="click"
-                />
-              </n-form-item>
-            </div>
-            <div class="actions">
-              <n-button type="primary" :loading="busy" @click="saveAPI">保存凭证</n-button>
-            </div>
-          </n-form>
-        </template>
-      </n-card>
-      <n-card v-if="loggedIn" size="small" class="block">
-        <h3>对话与收藏</h3>
-        <div class="stats">
-          <div><span class="label">频道/群</span> {{ summary?.dialogCount ?? 0 }}</div>
-          <div><span class="label">收藏</span> {{ summary?.savedCount ?? 0 }}</div>
-          <div>
-            <span class="label">收藏已下</span> {{ summary?.savedDownloaded ?? 0 }}
-          </div>
-        </div>
-        <p v-if="summary?.dialogsSyncedAt" class="hint">
-          上次同步：对话 {{ summary.dialogsSyncedAt }} · 收藏 {{ summary.savedSyncedAt || "—" }}
-        </p>
-        <n-button type="primary" :loading="syncing" @click="syncAll">同步频道、群组与收藏</n-button>
-      </n-card>
-
-      <n-card size="small" class="block">
-        <h3>登录状态</h3>
+        <h3>账户</h3>
         <n-alert :type="loggedIn ? 'success' : 'info'" style="margin-bottom: 12px">
           {{ status?.message || "未知状态" }}
         </n-alert>
-        <div v-if="status?.user" class="user">
-          <div>ID：{{ status.user.id }}</div>
-          <div v-if="status.user.username">用户名：@{{ status.user.username }}</div>
-          <div v-if="status.user.firstName">昵称：{{ status.user.firstName }}</div>
-          <div v-if="status.user.phone">手机：{{ status.user.phone }}</div>
+
+        <div v-if="status?.user || loggedIn" class="user-bar">
+          <div v-if="status?.user" class="user-row">
+            <div class="user-item">
+              <span class="label">ID</span>
+              <span>{{ status.user.id }}</span>
+            </div>
+            <div v-if="status.user.username" class="user-item">
+              <span class="label">用户名</span>
+              <span>@{{ status.user.username }}</span>
+            </div>
+            <div v-if="status.user.phone" class="user-item">
+              <span class="label">手机</span>
+              <span>{{ status.user.phone }}</span>
+            </div>
+          </div>
+          <n-button
+            v-if="loggedIn"
+            type="error"
+            secondary
+            size="small"
+            :loading="busy"
+            @click="confirmLogout"
+          >
+            退出登录
+          </n-button>
         </div>
-        <n-button v-if="loggedIn" type="error" secondary :loading="busy" @click="confirmLogout">
-          退出 Telegram
-        </n-button>
       </n-card>
 
-      <n-card v-if="status?.configured && !loggedIn" size="small" class="block">
+      <n-card v-if="loggedIn" size="small" class="block">
+        <div class="card-title">
+          <h3>对话与收藏</h3>
+          <span v-if="syncedAtText" class="synced-at">上次同步 {{ syncedAtText }}</span>
+        </div>
+        <div class="stats-bar">
+          <div class="stats">
+            <div>
+              <span class="label">频道/群</span>
+              {{ summary?.dialogCount ?? 0 }}
+            </div>
+            <div>
+              <span class="label">收藏</span>
+              {{ summary?.savedCount ?? 0 }}
+            </div>
+            <div>
+              <span class="label">收藏已下</span>
+              {{ summary?.savedDownloaded ?? 0 }}
+            </div>
+          </div>
+          <n-button type="primary" size="small" :loading="syncing" @click="syncAll">
+            同步收藏/对话
+          </n-button>
+        </div>
+      </n-card>
+
+      <n-card v-if="!loggedIn" size="small" class="block">
         <h3>验证码登录</h3>
+        <n-alert v-if="status && !status.configured" type="warning" style="margin-bottom: 12px">
+          API 凭证未就绪，请重启后端（会自动写入 Desktop 公开凭证）。
+        </n-alert>
         <n-form label-placement="top">
           <n-form-item label="手机号（含国际区号）">
             <n-input
               v-model:value="form.phone"
               placeholder="+86138xxxxxxxx"
-              :disabled="busy || step !== 'idle'"
+              :disabled="busy || step !== 'idle' || !status?.configured"
             />
           </n-form-item>
           <n-button
             v-if="step === 'idle'"
             type="primary"
             :loading="busy"
-            :disabled="!form.phone"
+            :disabled="!form.phone || !status?.configured"
             @click="sendCode"
           >
             发送验证码
@@ -351,28 +296,54 @@ onMounted(() => void load());
   margin-bottom: 14px;
 }
 .block h3 {
-  margin: 0 0 8px;
+  margin: 0;
   font-size: 15px;
   color: #f9a8d4;
 }
+.card-title {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+.synced-at {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.45);
+  font-weight: 400;
+}
 .hint {
-  margin: 0 0 12px;
+  margin: 12px 0 0;
   font-size: 13px;
   color: rgba(255, 255, 255, 0.45);
 }
-.hint a {
-  color: #f9a8d4;
+.user-bar,
+.stats-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
 }
-.row {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 12px;
+.user-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 24px;
+  font-size: 14px;
+  color: rgba(255, 255, 255, 0.78);
+  min-width: 0;
 }
-.user {
-  margin-bottom: 12px;
-  font-size: 13px;
-  color: rgba(255, 255, 255, 0.7);
-  line-height: 1.7;
+.user-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.user-item .label,
+.stats .label {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.45);
 }
 .actions {
   display: flex;
@@ -382,19 +353,12 @@ onMounted(() => void load());
 .stats {
   display: flex;
   flex-wrap: wrap;
-  gap: 20px;
-  margin-bottom: 12px;
+  gap: 24px;
   font-size: 15px;
+  min-width: 0;
 }
 .stats .label {
   display: block;
-  font-size: 12px;
-  color: rgba(255, 255, 255, 0.45);
   margin-bottom: 4px;
-}
-@media (max-width: 1000px) {
-  .row {
-    grid-template-columns: 1fr;
-  }
 }
 </style>

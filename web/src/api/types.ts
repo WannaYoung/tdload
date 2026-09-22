@@ -31,6 +31,14 @@ export type DashboardStats = {
   diskTotal: number;
   tgConfigured: boolean;
   watchEnabled: boolean;
+  dialogCount?: number;
+  savedCount?: number;
+  savedDownloaded?: number;
+  dialogsSyncedAt?: string;
+  savedSyncedAt?: string;
+  proxyConfigured?: boolean;
+  threads?: number;
+  concurrency?: number;
 };
 
 export type Settings = {
@@ -41,12 +49,14 @@ export type Settings = {
   sessionDir: string;
   appId: number;
   appHashSet: boolean;
+  usingDesktopPreset?: boolean;
   threads: number;
   concurrency: number;
   skipSame: boolean;
   groupAlbum: boolean;
   rewriteExt: boolean;
   takeout: boolean;
+  noImage: boolean;
   template: string;
   proxy: string;
 };
@@ -105,6 +115,8 @@ export type TaskItemRow = {
   status: string;
   localPath: string;
   error: string;
+  chatTitle?: string;
+  mediaKind?: string;
 };
 
 export type LibraryItem = {
