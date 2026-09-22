@@ -18,12 +18,12 @@ import {
   InformationCircleOutline,
   SaveOutline,
 } from "@vicons/ionicons5";
-import { api } from "../api/http";
-import type { Settings } from "../api/types";
-import { useMobile } from "../composables/useMobile";
-import { applyNoImageSetting } from "../composables/useNoImage";
+import { api } from "../../api/http";
+import type { Settings } from "../../api/types";
+import { useMobile } from "../../composables/useMobile";
+import { applyNoImageSetting } from "../../composables/useNoImage";
+import SettingsSection from "./components/SettingsSection.vue";
 
-const sectionHeadColor = "rgba(255, 255, 255, 0.92)";
 const isMobile = useMobile();
 const message = useMessage();
 const loading = ref(false);
@@ -116,25 +116,13 @@ onMounted(() => void load());
     :label-width="isMobile ? 'auto' : 140"
     :disabled="loading"
   >
-    <section class="settings-section sec-ui">
-      <div class="section-head">
-        <h3 class="section-title">
-          <n-icon class="section-icon" :component="DesktopOutline" :size="18" :color="sectionHeadColor" />
-          界面浏览
-        </h3>
-      </div>
+    <SettingsSection class="sec-ui" title="界面浏览" :icon="DesktopOutline">
       <n-form-item label="无图模式">
         <n-switch v-model:value="form.noImage" />
       </n-form-item>
-    </section>
+    </SettingsSection>
 
-    <section class="settings-section sec-download">
-      <div class="section-head">
-        <h3 class="section-title">
-          <n-icon class="section-icon" :component="CloudDownloadOutline" :size="18" :color="sectionHeadColor" />
-          下载任务
-        </h3>
-      </div>
+    <SettingsSection class="sec-download" title="下载任务" :icon="CloudDownloadOutline">
       <n-form-item label="文件名模板">
         <n-input v-model:value="form.template" />
       </n-form-item>
@@ -162,15 +150,9 @@ onMounted(() => void load());
           <n-switch v-model:value="form.takeout" />
         </div>
       </n-form-item>
-    </section>
+    </SettingsSection>
 
-    <section class="settings-section sec-watch">
-      <div class="section-head">
-        <h3 class="section-title">
-          <n-icon class="section-icon" :component="EyeOutline" :size="18" :color="sectionHeadColor" />
-          监听
-        </h3>
-      </div>
+    <SettingsSection class="sec-watch" title="监听" :icon="EyeOutline">
       <n-form-item label="执行间隔（分钟）">
         <n-input-number
           v-model:value="form.watchIntervalMinutes"
@@ -183,32 +165,15 @@ onMounted(() => void load());
       <p class="hint" :class="{ mobile: isMobile }">
         默认 30 分钟，范围 10–300。仅下载加入监听后新增区间内的消息（含端点），下载前按索引去重。
       </p>
-    </section>
+    </SettingsSection>
 
-    <section class="settings-section sec-proxy">
-      <div class="section-head">
-        <h3 class="section-title">
-          <n-icon class="section-icon" :component="GlobeOutline" :size="18" :color="sectionHeadColor" />
-          网络
-        </h3>
-      </div>
+    <SettingsSection class="sec-proxy" title="网络" :icon="GlobeOutline">
       <n-form-item label="代理">
         <n-input v-model:value="form.proxy" placeholder="socks5://127.0.0.1:1080 或 http://…" />
       </n-form-item>
-    </section>
+    </SettingsSection>
 
-    <section class="settings-section sec-info">
-      <div class="section-head">
-        <h3 class="section-title">
-          <n-icon
-            class="section-icon"
-            :component="InformationCircleOutline"
-            :size="18"
-            :color="sectionHeadColor"
-          />
-          系统信息
-        </h3>
-      </div>
+    <SettingsSection class="sec-info" title="系统信息" :icon="InformationCircleOutline">
       <n-form-item label="版本">
         <span>{{ about.version || "—" }}</span>
       </n-form-item>
@@ -218,7 +183,7 @@ onMounted(() => void load());
         </a>
         <span v-else>—</span>
       </n-form-item>
-    </section>
+    </SettingsSection>
 
     <div class="form-actions">
       <n-button type="primary" :loading="saving" :disabled="loading" @click="save">
@@ -239,36 +204,6 @@ onMounted(() => void load());
   grid-template-columns: 1fr;
   gap: 16px;
   align-items: stretch;
-}
-.settings-section {
-  margin: 0;
-  padding: 16px 16px 8px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 10px;
-  background: rgba(255, 255, 255, 0.025);
-  min-width: 0;
-}
-.section-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  margin: 0 0 14px;
-  padding-bottom: 10px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-}
-.section-title {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin: 0;
-  font-size: 15px;
-  font-weight: 650;
-  letter-spacing: 0.02em;
-  color: v-bind(sectionHeadColor);
-}
-.section-icon {
-  flex-shrink: 0;
 }
 .num {
   width: 100%;
@@ -352,9 +287,6 @@ onMounted(() => void load());
 }
 
 @media (max-width: 640px) {
-  .settings-section {
-    padding: 14px 12px 4px;
-  }
   .num {
     max-width: none;
   }

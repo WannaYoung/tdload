@@ -9,8 +9,8 @@ import {
   useMessage,
   type DataTableColumns,
 } from "naive-ui";
-import { api } from "../api/http";
-import type { WatchCandidate, WatchRow } from "../api/types";
+import { api } from "../../api/http";
+import type { WatchCandidate, WatchRow } from "../../api/types";
 
 defineOptions({ name: "WatchView" });
 

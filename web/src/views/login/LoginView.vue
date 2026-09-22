@@ -2,7 +2,7 @@
 import { reactive, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { NButton, NCard, NForm, NFormItem, NInput, useMessage } from "naive-ui";
-import { useAuthStore } from "../stores/auth";
+import { useAuthStore } from "../../stores/auth";
 
 const auth = useAuthStore();
 const router = useRouter();
@@ -10,8 +10,8 @@ const route = useRoute();
 const message = useMessage();
 const loading = ref(false);
 const form = reactive({
-  username: "wannayoung",
-  password: "52111314",
+  username: "",
+  password: "",
 });
 
 async function submit() {

@@ -8,8 +8,8 @@
 
 ## 当前进度
 
-- **已具备**：Telegram 同步、频道页、任务三 Tab、频道批量/续下、收藏下载、资源库预览与扫盘、**监听自动入队**（含过滤）、Takeout、消息链接下载、SSE、关于页
-- **下一步（可选）**：Docker 多架构（M4）；二维码登录 / JSON 入队等细节
+- **已具备**：Telegram 同步、频道页、任务三 Tab、频道批量/续下、收藏下载、资源库预览与扫盘、**监听自动入队**（含过滤）、Takeout、消息链接下载、SSE、关于页、Docker 部署
+- **下一步（可选）**：Docker 多架构推送；二维码登录 / JSON 入队等细节
 
 ### 测试频道批量（M3.6）
 
@@ -44,7 +44,7 @@ go run ./cmd/tdload
 cd web && pnpm install && pnpm dev
 ```
 
-浏览器打开 <http://127.0.0.1:3080>，默认管理员 `wannayoung` / `52111314`（见 `.env`，登录页已预填）。
+浏览器打开 <http://127.0.0.1:3080>，默认管理员见 `.env` 中的 `ADMIN_*`。
 
 ### 测试 Telegram 登录（M1）
 
@@ -62,5 +62,17 @@ cd web && pnpm install && pnpm dev
 3. 打开 **任务**，粘贴一条公开频道消息链接，例如 `https://t.me/telegram/193`（每行一条）  
 4. 点「开始下载」，应看到进度；完成后文件在设置里的下载目录（默认 `./downloads`）  
 5. 可测：暂停、重试、删除、清理已完成  
+
+## Docker 部署
+
+```bash
+cp .env.example .env   # 必填 ADMIN_USERNAME / ADMIN_PASSWORD；可选 PROXY=
+docker compose up -d --build
+```
+
+- 端口：宿主机 `3080` → 容器 `3080`
+- 配置卷：`./data/config` → `/tdload/config`（`config.yaml`、数据库、session）
+- 下载卷：`./data/downloads` → `/tdload/downloads`
+- 打开 <http://127.0.0.1:3080>
 
 许可证：AGPL-3.0（见 [LICENSE](LICENSE)、[NOTICE](NOTICE)）

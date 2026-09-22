@@ -1,5 +1,5 @@
 # 运行时配置。jwt_secret 首次启动若留空会自动生成并写回。
-# 管理员与 Telegram API 凭证优先用环境变量 ADMIN_* / TG_*。
+# 管理员与 Telegram API 凭证优先用环境变量 ADMIN_* / TG_*；代理可用 PROXY。
 
 bind: "0.0.0.0:3030"
 download_dir: "./downloads"
@@ -22,5 +22,5 @@ no_image: false      # 界面无图模式：资源库预览用占位图
 watch_interval_minutes: 30  # 监听轮询间隔（分钟，10–300）
 template: "{{DialogID }}-{{MessageID }}-{{FileName }}"
 
-proxy: ""
+proxy: ""          # 也可设环境变量 PROXY 覆盖
 jwt_secret: ""

@@ -1,0 +1,15 @@
+services:
+  tdload:
+    build: .
+    image: tdload:local
+    container_name: tdload
+    restart: unless-stopped
+    ports:
+      - "3080:3080"
+    environment:
+      ADMIN_USERNAME: ${ADMIN_USERNAME:?set ADMIN_USERNAME in .env}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?set ADMIN_PASSWORD in .env}
+      PROXY: ${PROXY:-}
+    volumes:
+      - ./data/config:/tdload/config
+      - ./data/downloads:/tdload/downloads

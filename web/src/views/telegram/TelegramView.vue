@@ -11,8 +11,8 @@ import {
   useDialog,
   useMessage,
 } from "naive-ui";
-import { api } from "../api/http";
-import type { TgStatus, TGSummary } from "../api/types";
+import { api } from "../../api/http";
+import type { TgStatus, TGSummary } from "../../api/types";
 
 const message = useMessage();
 const dialog = useDialog();

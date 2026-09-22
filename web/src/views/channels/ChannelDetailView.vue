@@ -12,8 +12,8 @@ import {
   NTag,
   useMessage,
 } from "naive-ui";
-import { api, openEventSource } from "../api/http";
-import type { ChannelDownloadInfo, ItemCounts } from "../api/types";
+import { api, openEventSource } from "../../api/http";
+import type { ChannelDownloadInfo, ItemCounts } from "../../api/types";
 
 defineOptions({ name: "ChannelDetailView" });
 

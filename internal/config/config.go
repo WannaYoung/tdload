@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -57,8 +58,22 @@ func Default() *Config {
 	}
 }
 
-func Load(path string) (*Config, error) {
+// defaultForPath 首次生成配置时：Docker 路径（/tdload/...）用容器绝对路径，否则用本地相对路径。
+func defaultForPath(path string) *Config {
 	cfg := Default()
+	clean := filepath.ToSlash(filepath.Clean(path))
+	if strings.HasPrefix(clean, "/tdload/") {
+		cfg.Bind = "0.0.0.0:3080"
+		cfg.DownloadDir = "/tdload/downloads"
+		cfg.WebDir = "/app/web"
+		cfg.DBPath = "/tdload/config/tdload.db"
+		cfg.SessionDir = "/tdload/config/session"
+	}
+	return cfg
+}
+
+func Load(path string) (*Config, error) {
+	cfg := defaultForPath(path)
 	cfg.path = path
 
 	data, err := os.ReadFile(path)
@@ -129,6 +144,9 @@ func (c *Config) applyEnv() {
 	}
 	if v := os.Getenv("JWT_SECRET"); v != "" {
 		c.JWTSecret = v
+	}
+	if v := os.Getenv("PROXY"); v != "" {
+		c.Proxy = v
 	}
 	if v := os.Getenv("TG_APP_ID"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil {

@@ -5,14 +5,14 @@ import {
   NButton,
   NDataTable,
   NEmpty,
-  NProgress,
   NSpin,
   NTag,
   useMessage,
   type DataTableColumns,
 } from "naive-ui";
-import { api } from "../api/http";
-import type { ChannelRow } from "../api/types";
+import { api } from "../../api/http";
+import type { ChannelRow } from "../../api/types";
+import ChannelCoverageBar from "./components/ChannelCoverageBar.vue";
 
 const router = useRouter();
 const message = useMessage();
@@ -95,15 +95,10 @@ const columns: DataTableColumns<ChannelRow> = [
     render: (r) => {
       const c = r.scanCursor ?? r.lastDownloadedMessageId ?? 0;
       const l = r.lastMessageId || 0;
-      return h("div", { class: "cov" }, [
-        h(NProgress, {
-          type: "line",
-          percentage: coveragePct(r),
-          showIndicator: false,
-          style: "width:100%",
-        }),
-        h("div", { class: "cov-text" }, l > 0 ? `#${c} / #${l}` : `水位 #${c}`),
-      ]);
+      return h(ChannelCoverageBar, {
+        percent: coveragePct(r),
+        text: l > 0 ? `#${c} / #${l}` : `水位 #${c}`,
+      });
     },
   },
   {
@@ -222,14 +217,5 @@ onMounted(() => void load());
   margin-top: 2px;
   font-size: 12px;
   color: rgba(255, 255, 255, 0.4);
-}
-:deep(.cov) {
-  width: 140px;
-}
-:deep(.cov-text) {
-  margin-top: 2px;
-  font-size: 11px;
-  color: rgba(255, 255, 255, 0.45);
-  font-variant-numeric: tabular-nums;
 }
 </style>

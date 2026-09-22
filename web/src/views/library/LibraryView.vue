@@ -1,15 +1,11 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
+import { computed, onMounted, onUnmounted, ref } from "vue";
 import { NButton, NEmpty, NIcon, NSelect, NSpin, useMessage } from "naive-ui";
-import {
-  CloseOutline,
-  ChevronBackOutline,
-  ChevronForwardOutline,
-  PlayOutline,
-} from "@vicons/ionicons5";
-import { api, ensureTicket, getToken } from "../api/http";
-import type { LibraryItem } from "../api/types";
-import { useNoImage, withImagePlaceholder } from "../composables/useNoImage";
+import { PlayOutline } from "@vicons/ionicons5";
+import { api, ensureTicket, getToken } from "../../api/http";
+import type { LibraryItem } from "../../api/types";
+import { useNoImage, withImagePlaceholder } from "../../composables/useNoImage";
+import MediaViewer from "./components/MediaViewer.vue";
 
 defineOptions({ name: "LibraryView" });
 
@@ -30,7 +26,7 @@ const viewerOpen = ref(false);
 const viewerIndex = ref(0);
 const imgReady = ref(false);
 const touchStartX = ref(0);
-const videoEl = ref<HTMLVideoElement | null>(null);
+const viewerRef = ref<{ pauseVideo: () => void } | null>(null);
 
 const filterOptions = ref<{ label: string; value: string }[]>([
   { label: "全部频道", value: "all" },
@@ -154,10 +150,7 @@ function onImgError(id: number) {
 }
 
 function pauseVideo() {
-  const el = videoEl.value;
-  if (el) {
-    el.pause();
-  }
+  viewerRef.value?.pauseVideo();
 }
 
 function openViewer(it: LibraryItem) {
@@ -206,11 +199,6 @@ function onKey(e: KeyboardEvent) {
   if (e.key === "ArrowRight") go(1);
 }
 
-watch(current, async (it) => {
-  if (!viewerOpen.value || it?.mediaKind !== "video") return;
-  await nextTick();
-  videoEl.value?.load();
-});
 
 onMounted(() => {
   window.addEventListener("keydown", onKey);
@@ -289,75 +277,23 @@ onUnmounted(() => {
       <n-button size="small" :disabled="page * pageSize >= total" @click="page++; load()">下一页</n-button>
     </div>
 
-    <Teleport to="body">
-      <div
-        v-if="viewerOpen && current"
-        class="viewer"
-        role="dialog"
-        aria-modal="true"
-        @touchstart.passive="onTouchStart"
-        @touchend.passive="onTouchEnd"
-      >
-        <header class="viewer-bar">
-          <n-button quaternary @click="closeViewer">
-            <template #icon>
-              <n-icon :component="CloseOutline" />
-            </template>
-            关闭
-          </n-button>
-          <h1 class="viewer-title" :title="current.fileName">{{ current.fileName }}</h1>
-          <div class="viewer-actions">
-            <n-button size="small" quaternary @click="removeItem(current, false)">删索引</n-button>
-            <n-button size="small" quaternary type="error" @click="removeItem(current, true)">删文件</n-button>
-            <span class="viewer-counter">{{ counter }}</span>
-          </div>
-        </header>
-
-        <div class="viewer-body">
-          <button
-            class="viewer-nav prev"
-            type="button"
-            :disabled="viewerIndex <= 0"
-            aria-label="上一项"
-            @click="go(-1)"
-          >
-            <n-icon size="28" :component="ChevronBackOutline" />
-          </button>
-
-          <div class="viewer-stage">
-            <img
-              v-if="current.mediaKind === 'image'"
-              :key="`img-${current.id}`"
-              class="viewer-media"
-              :class="{ ready: imgReady }"
-              :src="currentSrc()"
-              :alt="current.fileName"
-              @load="imgReady = true"
-            />
-            <video
-              v-else-if="current.mediaKind === 'video'"
-              :key="`vid-${current.id}`"
-              ref="videoEl"
-              class="viewer-media video ready"
-              controls
-              playsinline
-              preload="metadata"
-              :src="currentSrc()"
-            />
-          </div>
-
-          <button
-            class="viewer-nav next"
-            type="button"
-            :disabled="viewerIndex >= browseable.length - 1"
-            aria-label="下一项"
-            @click="go(1)"
-          >
-            <n-icon size="28" :component="ChevronForwardOutline" />
-          </button>
-        </div>
-      </div>
-    </Teleport>
+    <MediaViewer
+      ref="viewerRef"
+      :open="viewerOpen"
+      :item="current"
+      :src="currentSrc()"
+      :counter="counter"
+      :index="viewerIndex"
+      :total="browseable.length"
+      v-model:img-ready="imgReady"
+      @close="closeViewer"
+      @prev="go(-1)"
+      @next="go(1)"
+      @remove-index="current && removeItem(current, false)"
+      @remove-file="current && removeItem(current, true)"
+      @touch-start="onTouchStart"
+      @touch-end="onTouchEnd"
+    />
   </div>
 </template>
 
@@ -475,107 +411,3 @@ h2 {
 }
 </style>
 
-<style>
-.viewer {
-  position: fixed;
-  inset: 0;
-  z-index: 3000;
-  display: flex;
-  flex-direction: column;
-  background: rgba(8, 8, 12, 0.96);
-}
-.viewer-bar {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  flex-shrink: 0;
-  height: 52px;
-  padding: 0 10px 0 6px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-}
-.viewer-title {
-  flex: 1;
-  min-width: 0;
-  margin: 0;
-  font-size: 15px;
-  font-weight: 600;
-  color: rgba(255, 255, 255, 0.9);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.viewer-counter {
-  flex-shrink: 0;
-  color: rgba(255, 255, 255, 0.5);
-  font-size: 13px;
-  font-variant-numeric: tabular-nums;
-}
-.viewer-actions {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  flex-shrink: 0;
-}
-.viewer-body {
-  flex: 1;
-  min-height: 0;
-  display: grid;
-  grid-template-columns: 48px 1fr 48px;
-  touch-action: pan-y;
-}
-.viewer-stage {
-  grid-column: 2;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 0;
-  min-height: 0;
-  padding: 12px 0;
-}
-.viewer-media {
-  max-width: 100%;
-  max-height: 100%;
-  object-fit: contain;
-  opacity: 0.35;
-  transition: opacity 0.16s ease;
-  user-select: none;
-  background: #000;
-}
-.viewer-media.ready {
-  opacity: 1;
-}
-.viewer-media.video {
-  width: min(100%, 1100px);
-  max-height: calc(100vh - 80px);
-  border-radius: 8px;
-}
-.viewer-nav {
-  align-self: center;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  height: 64px;
-  border: 0;
-  background: transparent;
-  color: rgba(255, 255, 255, 0.78);
-  cursor: pointer;
-}
-.viewer-nav.prev {
-  grid-column: 1;
-}
-.viewer-nav.next {
-  grid-column: 3;
-}
-.viewer-nav:disabled {
-  opacity: 0.2;
-  cursor: default;
-}
-.viewer-nav:not(:disabled):hover {
-  color: #fff;
-}
-@media (max-width: 1000px) {
-  .viewer-body {
-    grid-template-columns: 36px 1fr 36px;
-  }
-}
-</style>
