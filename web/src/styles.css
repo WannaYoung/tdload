@@ -142,4 +142,8 @@ a {
     flex-wrap: wrap;
     row-gap: 8px;
   }
+
+  .list-page.pinned {
+    padding: 12px 12px 20px;
+  }
 }

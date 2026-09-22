@@ -454,6 +454,26 @@ async function retryFailed(id: number) {
   await reloadTab();
 }
 
+async function pauseAll() {
+  try {
+    const data = await api<{ paused: number }>("/api/tasks/pause-all", { method: "POST", body: "{}" });
+    message.success(`已暂停 ${data.paused} 个任务`);
+    await reloadTab();
+  } catch (e) {
+    message.error(e instanceof Error ? e.message : "暂停失败");
+  }
+}
+
+async function startAll() {
+  try {
+    const data = await api<{ started: number }>("/api/tasks/start-all", { method: "POST", body: "{}" });
+    message.success(`已恢复 ${data.started} 个任务`);
+    await reloadTab();
+  } catch (e) {
+    message.error(e instanceof Error ? e.message : "启动失败");
+  }
+}
+
 async function remove(id: number) {
   await api(`/api/tasks/${id}`, { method: "DELETE" });
   await reloadTab();
@@ -580,6 +600,8 @@ const channelOptions = computed(() =>
           {{ opt.label }}
         </button>
       </div>
+      <n-button quaternary :disabled="loading" @click="pauseAll">全部暂停</n-button>
+      <n-button quaternary :disabled="loading" @click="startAll">全部开始</n-button>
       <n-button quaternary :disabled="loading" @click="reloadTab">刷新</n-button>
     </div>
 

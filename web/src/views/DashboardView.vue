@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from "vue";
 import { useRouter } from "vue-router";
-import { NAlert, NButton, NIcon, NProgress, NSpin, NTag } from "naive-ui";
+import { NAlert, NButton, NIcon, NProgress, NSpin, NTag, useMessage } from "naive-ui";
 import {
   AddOutline,
   AlertCircleOutline,
@@ -35,6 +35,7 @@ type RecentTask = {
 
 const router = useRouter();
 const auth = useAuthStore();
+const message = useMessage();
 const loading = ref(true);
 const error = ref("");
 const stats = ref<DashboardStats | null>(null);
@@ -201,10 +202,21 @@ function applyEvent(raw: string) {
     const ev = JSON.parse(raw) as {
       type?: string;
       taskId?: number;
+      chatId?: number;
       done?: number;
       total?: number;
       status?: string;
+      title?: string;
+      error?: string;
     };
+    if (ev.type === "watch_hit") {
+      const range =
+        ev.done != null && ev.total != null ? `#${ev.done}–#${ev.total}` : "";
+      const count = ev.error ? `（${ev.error} 条）` : "";
+      message.info(`监听入队：${ev.title || ev.chatId || "对话"} ${range}${count}`);
+      scheduleRefresh();
+      return;
+    }
     const idx = tasks.value.findIndex((t) => t.id === ev.taskId);
     if (idx < 0) {
       if (ev.status || ev.type === "task_progress") scheduleRefresh();

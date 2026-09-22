@@ -408,9 +408,13 @@ Telegram 页点「刷新」后写入；频道页只读此表（必要时后台�
 - **预览**：列表卡片或表格行内 **缩略图**；图片 lightbox；视频 **内联或弹层播放器**（经 `/api/library/{id}/file` 或 preview + ticket，支持 Range）
 - 关键词搜索、分页、本地路径、删索引（可选删文件）、扫盘补索引（M6 可加强）
 
-**监听（二期）**
+**监听**
 
-- 从频道页或监听页选择对话；过滤规则、水位、自动创建 `source=watch` 任务
+- 设置：`watch_interval_minutes`（默认 30，范围 10–300）
+- 监听页：下拉添加（已监听不可再选；「我的收藏」置顶可选）；列表「我的收藏」置顶
+- 表头：频道、已下载、最新消息、上次运行、下次运行；删除移除
+- 加入时记录当前最新 message id 为水位，**不立刻下载**；到期后下载 `[水位, 最新]`（含端点），`skip_same` 去重；成功后推进水位
+- 任务 source：`watch` / `watch_saved`
 
 ### 7.3 当前实现与目标差距（2025-09 同步）
 
@@ -424,8 +428,10 @@ Telegram 页点「刷新」后写入；频道页只读此表（必要时后台�
 | 收藏下载 + `我的收藏/` | ✅ `saved_all` Worker + 目录 |
 | 频道批量 / 续下 / 起止 id | ✅ `chat_batch` / `chat_continue` |
 | 跳过已下载 | ✅ |
-| 资源库：频道下拉、图/视频预览筛选 | ✅ 基础版 |
-| 监听 | 占位 |
+| 资源库：频道下拉、图/视频预览筛选 | ✅ 基础版 + lightbox；**扫盘同步 / 删索引** |
+| 监听 | ✅ API + Watcher + 设置间隔 + 监听页 + filter / `watch_hit` |
+| Takeout / rewrite_ext | ✅ 设置开关已接到下载路径 |
+| 关于（AGPL） | ✅ 设置页 + `GET /api/about` |
 
 ### 7.4 前端目录建议
 
@@ -469,13 +475,13 @@ web/
 | GET | `/api/tg/status` | 会话是否有效 | 已实现 |
 | POST | `/api/tg/login/send_code` | 手机号发验证码 | 已实现 |
 | POST | `/api/tg/login/sign_in` | 验证码 / 2FA | 已实现 |
-| POST | `/api/tg/login/qr/start` | 返回 QR payload | 待定 |
-| GET | `/api/tg/login/qr/poll` | 轮询扫码结果 | 待定 |
+| POST | `/api/tg/login/qr/start` | 返回 QR payload | 待定（可选） |
+| GET | `/api/tg/login/qr/poll` | 轮询扫码结果 | 待定（可选） |
 | POST | `/api/tg/logout` | 清除 session | 已实现 |
-| POST | `/api/tg/sync/dialogs` | 刷新频道·群组 → `tg_dialogs` | **待实现** |
-| POST | `/api/tg/sync/saved` | 刷新收藏 → `saved_messages_cache` | **待实现** |
-| POST | `/api/tg/sync` | 可选：dialogs + saved 一次调用 | **待实现** |
-| GET | `/api/tg/summary` | `{ dialogCount, savedCount, syncedAt }` | **待实现** |
+| POST | `/api/tg/sync/dialogs` | 刷新频道·群组 → `tg_dialogs` | 已实现（经 `/api/tg/sync`） |
+| POST | `/api/tg/sync/saved` | 刷新收藏 → `saved_messages_cache` | 已实现（经 `/api/tg/sync`） |
+| POST | `/api/tg/sync` | dialogs + saved 一次调用 | 已实现 |
+| GET | `/api/tg/summary` | `{ dialogCount, savedCount, syncedAt }` | 已实现 |
 
 实现应对齐 tdl 登录流程（见 [tdl 登录文档](https://docs.iyear.me/tdl/guide/login/)），session 文件写入 `session_dir`。同步使用 gotd `messages.GetDialogs` / Saved Messages 历史；注意 FloodWait 与分页。
 
@@ -483,8 +489,8 @@ web/
 
 | 方法 | 路径 | 说明 | 状态 |
 |------|------|------|------|
-| GET | `/api/channels` | 分页列表：`kind`、消息数、已下载数、可选 `lastDownloadedMessageId` | **待实现** |
-| GET | `/api/channels/{chatId}` | 单对话详情 + 下载水位 | **待实现** |
+| GET | `/api/channels` | 分页列表：`kind`、消息数、已下载数、可选 `lastDownloadedMessageId` | 已实现 |
+| GET | `/api/channels/{chatId}` | 单对话详情 + 下载水位 | 已实现 |
 
 （可与 `GET /api/tg/dialogs` 合并为 `/api/channels`，避免两套列表 API。）
 
@@ -492,19 +498,19 @@ web/
 
 | 方法 | 路径 | 说明 | 状态 |
 |------|------|------|------|
-| GET | `/api/tasks` | 分页；**`kind`** 见下 | 部分（无 kind 分组） |
-| POST | `/api/tasks` | 创建（见下方 `source`） | 部分（ mainly `url` 文本） |
+| GET | `/api/tasks` | 分页；**`kind`** 见下 | 已实现 |
+| POST | `/api/tasks` | 创建（见下方 `source`） | 已实现（url / saved_all / chat_*） |
 | POST | `/api/tasks/batch` | 批量 URL / JSON | 待定 |
-| GET | `/api/tasks/{id}` | 详情；频道类返回 **聚合 counts**，不含 items 全量 | 部分 |
-| GET | `/api/tasks/{id}/items` | **仅 message/saved** 任务：单条 item 分页，默认 `pageSize=50` | 待定 |
+| GET | `/api/tasks/{id}` | 详情；频道类返回 **聚合 counts**，不含 items 全量 | 已实现 |
+| GET | `/api/tasks/{id}/items` | **仅 message/saved** 任务：单条 item 分页，默认 `pageSize=50` | 已实现 |
 | POST | `/api/tasks/{id}/pause` | 暂停 | 已实现 |
-| POST | `/api/tasks/{id}/resume` | 从 paused 继续 | 待定 |
-| POST | `/api/tasks/{id}/cancel` | 取消（`cancelled`） | 待定 |
+| POST | `/api/tasks/{id}/resume` | 从 paused 继续 | 已实现 |
+| POST | `/api/tasks/{id}/cancel` | 取消（`cancelled`） | 已实现 |
 | POST | `/api/tasks/{id}/retry` | 整任务重试（保留兼容） | 已实现 |
-| POST | `/api/tasks/{id}/retry-failed` | **仅 failed items** 重试 | 待定 |
+| POST | `/api/tasks/{id}/retry-failed` | **仅 failed items** 重试 | 已实现 |
 | DELETE | `/api/tasks/{id}` | 删除 | 已实现 |
-| POST | `/api/tasks/pause-all` | | 待定 |
-| POST | `/api/tasks/start-all` | | 待定 |
+| POST | `/api/tasks/pause-all` | | 已实现 |
+| POST | `/api/tasks/start-all` | | 已实现 |
 | DELETE | `/api/tasks/completed` | 清理已完成 | 已实现 |
 | GET | `/api/tasks/{id}/logs` | 日志 | 待定 |
 
@@ -590,12 +596,13 @@ message/saved 列表项可带 `itemsPreview`（当前页关联 items）或前端
 
 | 方法 | 路径 | 说明 | 状态 |
 |------|------|------|------|
-| GET | `/api/library/filters` | 频道下拉：**第一项「我的收藏」**，其余对话（id + 标题） | 待定 |
-| GET | `/api/library` | 列表；见下方 query | 待定 |
-| POST | `/api/library/sync` | 扫盘补索引 | 待定 |
-| DELETE | `/api/library/{id}` | 删索引（query: `delete_file=1`） | 待定 |
-| GET | `/api/library/{id}/file` | 原文件流；图片直接展示、视频 **Range** 播放 | 待定 |
+| GET | `/api/library/filters` | 频道下拉：**第一项「我的收藏」**，其余对话（id + 标题） | 已实现 |
+| GET | `/api/library` | 列表；见下方 query | 已实现 |
+| POST | `/api/library/sync` | 扫盘补索引 | 已实现 |
+| DELETE | `/api/library/{id}` | 删索引（query: `delete_file=1`） | 已实现 |
+| GET | `/api/library/{id}/file` | 原文件流；图片直接展示、视频 **Range** 播放 | 已实现 |
 | GET | `/api/library/{id}/thumb` | 可选：视频首帧 / 大图缩略（无则 404，前端用 mime 图标兜底） | 待定 |
+| GET | `/api/about` | 版本号、许可证、源码链接（AGPL） | 已实现 |
 
 **`GET /api/library` query：**
 
@@ -608,14 +615,16 @@ message/saved 列表项可带 `itemsPreview`（当前页关联 items）或前端
 
 列表项含：`id`, `chatId`, `chatTitle`, `messageId`, `fileName`, `mime`, `size`, `localPath`, `previewUrl`（或相对 path 供前端拼 ticket）。
 
-### 8.6 监听（二期）
+### 8.6 监听
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| GET/POST | `/api/watch` | 列表 / 创建规则 |
-| PATCH | `/api/watch/{id}` | 更新过滤、启停 |
-| DELETE | `/api/watch/{id}` | |
-| POST | `/api/watch/{id}/reset_cursor` | 重置水位 |
+| GET | `/api/watch` | 监听列表（「我的收藏」置顶） |
+| GET | `/api/watch/candidates` | 可添加的频道（已监听排除；收藏置顶） |
+| POST | `/api/watch` | body `{ chatId }`；加入时写入水位=当前最新，不下载 |
+| DELETE | `/api/watch/{id}` | 移除监听 |
+
+设置项：`watchIntervalMinutes`（10–300，默认 30）。
 
 ### 8.7 SSE 事件形状
 
@@ -930,13 +939,13 @@ services:
 | `internal/static` | SPA 静态托管 | 已完成 |
 | `internal/tg` | Telegram 登录与 client | **M1 验证码登录已完成** |
 | `internal/downloader` + `worker` + `progress` | tdl 下载与 SSE | **M2 + M3.6 频道批量已完成** |
-| `internal/watcher` | 频道监听 | 待 M5 |
+| `internal/watcher` | 频道监听 | **M5 已完成**（filter / watch_hit 已接） |
 | `web` 壳 | 深色 + 粉色高亮、宽窄屏布局、@vicons/ionicons5 | 已完成壳 |
 | Docker | 多架构镜像 | 待 M4 |
 
 **前端导航（目标）：** 仪表盘 · Telegram · **频道** · 任务 · 监听 · **资源库** · 设置（见 §7.1）
 
-**当前侧栏：** 仪表盘 · Telegram · 任务 · 资料库 · 监听 · 设置（缺频道；文案待改）
+**当前侧栏：** 仪表盘 · Telegram · 频道 · 任务 · 资源库 · 监听 · 设置
 
 ### M0 — 仓库骨架
 
@@ -970,7 +979,7 @@ services:
 - [x] 登录、仪表盘、TG、任务（链接入队）、资料库/监听占位、设置页
 - [x] 任务真实列表 + SSE 进度条 + 轮询兜底
 
-### M3.5 — 产品对齐（频道 · 三 Tab · 同步）**← 当前重点**
+### M3.5 — 产品对齐（频道 · 三 Tab · 同步）（已完成）
 
 依赖 M1 + M2 Worker；按 §7.2 验收。
 
@@ -1007,16 +1016,17 @@ services:
 
 ### M5 — 二期监听
 
-- [ ] `watched_chats` API（表已建）
-- [ ] Watcher + 过滤器 + 水位
-- [x] 前端监听页占位
-- [ ] 自动入队与 SSE `watch_hit`
+- [x] `watched_chats` API（列表 / 候选 / 添加 / 删除）
+- [x] Watcher 定时扫描 + 水位（含端点区间）+ 入队 `watch` / `watch_saved`
+- [x] 设置页监听间隔；监听页（收藏置顶）
+- [x] 扩展 `filter_json`（include/exclude_ext、min_size、keyword）与 SSE `watch_hit`
 
 ### M6 — 硬化
 
-- [ ] takeout、续传、去重扫盘
+- [x] takeout、rewrite_ext 接入下载路径；资源库扫盘补索引 / 删索引
+- [x] 任务 pause-all / start-all
 - [ ] 结构化日志、基础 metrics（可选）
-- [ ] 关于页：版本号 + 源码链接（AGPL）
+- [x] 关于信息：设置页版本号 + 源码链接（AGPL，`GET /api/about`）
 
 ---
 
@@ -1058,15 +1068,18 @@ services:
 
 ## 18. 下一步
 
-**当前：** M0–M3.5 与 **M3.6 频道批量 Worker** 已落地。
+**当前：** 一期功能与 **M5 监听**、**M6 硬化（除可选 metrics）** 已落地。非 Docker 主线可视为完成；细节可后续打磨。
 
 建议顺序：
 
 1. ~~M1 Telegram 登录~~ ✅（QR 可选）
 2. ~~M2 链接下载闭环~~ ✅
 3. ~~**M3.5 产品对齐**~~ ✅
-4. ~~**M3.6 频道批量 Worker**~~ ✅（`chat_batch` / `chat_continue`）
-5. **M4** Docker 多架构
-6. **M5** 监听自动入队（复用 `chat_continue` / 去重）
+4. ~~**M3.6 频道批量 Worker**~~ ✅
+5. ~~**M5** 监听自动入队~~ ✅（filter / `watch_hit` 已接）
+6. ~~**M6** 扫盘 / takeout / 关于页~~ ✅（结构化日志/metrics 可选）
+7. **M4** Docker 多架构（按需）
+
+可选后续：二维码登录、JSON 导出入队、资源库缩略图、关键词搜索强化。
 
 实现监听时可对照 xtools 的 Browse 交互（分类切换、批量勾选、入队），但数据源为 Telegram 对话而非站点分类。

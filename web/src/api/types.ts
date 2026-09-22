@@ -57,6 +57,7 @@ export type Settings = {
   rewriteExt: boolean;
   takeout: boolean;
   noImage: boolean;
+  watchIntervalMinutes: number;
   template: string;
   proxy: string;
 };
@@ -128,4 +129,25 @@ export type LibraryItem = {
   mime: string;
   mediaKind: string;
   localPath: string;
+};
+
+export type WatchRow = {
+  id: number;
+  chatId: number;
+  chatTitle: string;
+  isFavorites?: boolean;
+  enabled?: boolean;
+  lastMessageId: number;
+  cursorMessageId?: number;
+  downloadedCount: number;
+  lastRunAt?: string;
+  nextRunAt?: string;
+  createdAt?: string;
+};
+
+export type WatchCandidate = {
+  chatId: number;
+  title: string;
+  kind: string;
+  username?: string;
 };

@@ -191,82 +191,96 @@ func (m *Manager) DownloadSaved(ctx context.Context, opt DownloadOptions, favori
 	}
 	opt.OutSubdir = FavoritesFolderName
 	return m.Run(ctx, func(ctx context.Context, client *telegram.Client) error {
-		api := client.API()
-		peer := &tg.InputPeerSelf{}
-		done := 0
-		total := len(messageIDs)
-		for _, mid := range messageIDs {
-			msg, err := tutil.GetSingleMessage(ctx, api, peer, mid)
-			if err != nil {
-				if opt.OnItem != nil {
-					opt.OnItem(favoritesChatID, mid, "failed", "", "", err.Error())
-				}
-				continue
-			}
+		return m.withAPI(ctx, client, func(ctx context.Context, api *tg.Client) error {
+			peer := &tg.InputPeerSelf{}
+			done := 0
+			total := len(messageIDs)
 			dl := downloader.NewDownloader()
 			outRoot := filepath.Join(opt.OutDir, FavoritesFolderName)
 			if err := os.MkdirAll(outRoot, 0o755); err != nil {
 				return err
 			}
-			elem := messages.Elem{Msg: msg}
-			file, ok := elem.File()
-			if !ok {
-				if opt.OnItem != nil {
-					opt.OnItem(favoritesChatID, mid, "skipped", "", "", "无媒体")
-				}
-				done++
-				if opt.OnProgress != nil {
-					opt.OnProgress(done, total, fmt.Sprintf("msg %d 无媒体", mid))
-				}
-				continue
-			}
-			if opt.OnItem != nil {
-				opt.OnItem(favoritesChatID, mid, "downloading", file.Name, "", "")
-			}
-			size := mediaSize(msg)
-			if opt.SkipSame && opt.Exists != nil && size > 0 {
-				if exists, path, err := opt.Exists(favoritesChatID, mid, size); err == nil && exists {
+			for _, mid := range messageIDs {
+				msg, err := tutil.GetSingleMessage(ctx, api, peer, mid)
+				if err != nil {
 					if opt.OnItem != nil {
-						opt.OnItem(favoritesChatID, mid, "skipped", file.Name, path, "")
-					}
-					if opt.OnFile != nil {
-						_ = opt.OnFile(favoritesChatID, mid, file.Name, size, path, file.MIMEType)
-					}
-					done++
-					if opt.OnProgress != nil {
-						opt.OnProgress(done, total, file.Name+" (已存在)")
+						opt.OnItem(favoritesChatID, mid, "failed", "", "", err.Error())
 					}
 					continue
 				}
-			}
-			name := file.Name
-			if name == "" {
-				name = fmt.Sprintf("%d_%d", favoritesChatID, mid)
-			}
-			path := filepath.Join(outRoot, safeFileName(name))
-			_, err = dl.Download(api, file.Location).ToPath(ctx, path)
-			if err != nil {
+				elem := messages.Elem{Msg: msg}
+				file, ok := elem.File()
+				if !ok {
+					if opt.OnItem != nil {
+						opt.OnItem(favoritesChatID, mid, "skipped", "", "", "无媒体")
+					}
+					done++
+					if opt.OnProgress != nil {
+						opt.OnProgress(done, total, fmt.Sprintf("msg %d 无媒体", mid))
+					}
+					continue
+				}
 				if opt.OnItem != nil {
-					opt.OnItem(favoritesChatID, mid, "failed", name, "", err.Error())
+					opt.OnItem(favoritesChatID, mid, "downloading", file.Name, "", "")
+				}
+				size := mediaSize(msg)
+				if !opt.Filter.Match(file.Name, size, msg.Message) {
+					if opt.OnItem != nil {
+						opt.OnItem(favoritesChatID, mid, "skipped", file.Name, "", "过滤规则跳过")
+					}
+					done++
+					if opt.OnProgress != nil {
+						opt.OnProgress(done, total, file.Name+" (过滤)")
+					}
+					continue
+				}
+				if opt.SkipSame && opt.Exists != nil && size > 0 {
+					if exists, path, err := opt.Exists(favoritesChatID, mid, size); err == nil && exists {
+						if opt.OnItem != nil {
+							opt.OnItem(favoritesChatID, mid, "skipped", file.Name, path, "")
+						}
+						if opt.OnFile != nil {
+							_ = opt.OnFile(favoritesChatID, mid, file.Name, size, path, file.MIMEType)
+						}
+						done++
+						if opt.OnProgress != nil {
+							opt.OnProgress(done, total, file.Name+" (已存在)")
+						}
+						continue
+					}
+				}
+				name := file.Name
+				if opt.RewriteExt {
+					name = rewriteExtByMIME(name, file.MIMEType)
+				}
+				if name == "" {
+					name = fmt.Sprintf("%d_%d", favoritesChatID, mid)
+				}
+				path := filepath.Join(outRoot, safeFileName(name))
+				_, err = dl.Download(api, file.Location).ToPath(ctx, path)
+				if err != nil {
+					if opt.OnItem != nil {
+						opt.OnItem(favoritesChatID, mid, "failed", name, "", err.Error())
+					}
+					done++
+					if opt.OnProgress != nil {
+						opt.OnProgress(done, total, name+" 失败")
+					}
+					continue
+				}
+				if opt.OnFile != nil {
+					_ = opt.OnFile(favoritesChatID, mid, name, size, path, file.MIMEType)
+				}
+				if opt.OnItem != nil {
+					opt.OnItem(favoritesChatID, mid, "done", name, path, "")
 				}
 				done++
 				if opt.OnProgress != nil {
-					opt.OnProgress(done, total, name+" 失败")
+					opt.OnProgress(done, total, name)
 				}
-				continue
 			}
-			if opt.OnFile != nil {
-				_ = opt.OnFile(favoritesChatID, mid, name, size, path, file.MIMEType)
-			}
-			if opt.OnItem != nil {
-				opt.OnItem(favoritesChatID, mid, "done", name, path, "")
-			}
-			done++
-			if opt.OnProgress != nil {
-				opt.OnProgress(done, total, name)
-			}
-		}
-		return nil
+			return nil
+		})
 	})
 }
 

@@ -10,6 +10,7 @@ import (
 
 	"tdload/internal/auth"
 	"tdload/internal/db"
+	"tdload/internal/library"
 	"tdload/internal/tg"
 )
 
@@ -113,6 +114,54 @@ func (s *Server) handleListLibrary(w http.ResponseWriter, r *http.Request) {
 		"items": items, "total": totalAll, "page": page, "pageSize": pageSize,
 		"available": len(items),
 	})
+}
+
+func (s *Server) handleLibrarySync(w http.ResponseWriter, r *http.Request) {
+	selfID := int64(0)
+	if acc, _ := s.DB.GetTGAccount(r.Context(), db.DefaultTGAccountID); acc != nil {
+		selfID = acc.UserID
+	}
+	if selfID == 0 && s.TG != nil {
+		if id, err := s.TG.SelfUserID(r.Context()); err == nil {
+			selfID = id
+		}
+	}
+	favID := tg.FavoritesChatID(selfID)
+	res, err := library.SyncDisk(r.Context(), s.DB, s.Cfg.DownloadDir, favID)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	_ = s.DB.RefreshDialogDownloadCounts(r.Context(), db.DefaultTGAccountID)
+	writeOK(w, res)
+}
+
+func (s *Server) handleDeleteLibrary(w http.ResponseWriter, r *http.Request) {
+	id, err := pathID(r, "id")
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "无效 id")
+		return
+	}
+	row, err := s.DB.GetMedia(r.Context(), id)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if row == nil {
+		writeErr(w, http.StatusNotFound, "索引不存在")
+		return
+	}
+	deleteFile := r.URL.Query().Get("delete_file") == "1" || r.URL.Query().Get("deleteFile") == "1"
+	if deleteFile {
+		if abs, err := s.resolveMediaPath(row.LocalPath); err == nil {
+			_ = os.Remove(abs)
+		}
+	}
+	if err := s.DB.DeleteMedia(r.Context(), id); err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeOK(w, map[string]any{"ok": true, "deletedFile": deleteFile})
 }
 
 func (s *Server) handleLibraryFile(w http.ResponseWriter, r *http.Request) {

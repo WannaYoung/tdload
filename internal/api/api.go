@@ -65,9 +65,18 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/tasks/{id}/resume", s.withAuth(s.handleResumeTask))
 	mux.HandleFunc("POST /api/tasks/{id}/cancel", s.withAuth(s.handleCancelTask))
 	mux.HandleFunc("POST /api/tasks/{id}/retry-failed", s.withAuth(s.handleRetryFailedTask))
+	mux.HandleFunc("POST /api/tasks/pause-all", s.withAuth(s.handlePauseAllTasks))
+	mux.HandleFunc("POST /api/tasks/start-all", s.withAuth(s.handleStartAllTasks))
 	mux.HandleFunc("GET /api/library/filters", s.withAuth(s.handleLibraryFilters))
 	mux.HandleFunc("GET /api/library", s.withAuth(s.handleListLibrary))
+	mux.HandleFunc("POST /api/library/sync", s.withAuth(s.handleLibrarySync))
+	mux.HandleFunc("DELETE /api/library/{id}", s.withAuth(s.handleDeleteLibrary))
 	mux.HandleFunc("GET /api/library/{id}/file", s.withFileAuth(s.handleLibraryFile))
+	mux.HandleFunc("GET /api/watch", s.withAuth(s.handleListWatch))
+	mux.HandleFunc("GET /api/watch/candidates", s.withAuth(s.handleWatchCandidates))
+	mux.HandleFunc("POST /api/watch", s.withAuth(s.handleCreateWatch))
+	mux.HandleFunc("DELETE /api/watch/{id}", s.withAuth(s.handleDeleteWatch))
+	mux.HandleFunc("GET /api/about", s.withAuth(s.handleAbout))
 	mux.HandleFunc("GET /api/events", s.withSSEAuth(s.handleEvents))
 }
 
@@ -157,6 +166,10 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 		savedDownloaded, _ = s.DB.SavedDownloadedCount(r.Context(), favID)
 	}
 	dialogsAt, savedAt, _ := s.DB.LastSyncedAt(r.Context(), db.DefaultTGAccountID)
+	watchCount := 0
+	if watches, err := s.DB.ListWatchedChats(r.Context(), db.DefaultTGAccountID); err == nil {
+		watchCount = len(watches)
+	}
 
 	writeOK(w, map[string]any{
 		"tgAccounts":       tgTotal,
@@ -173,7 +186,9 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 		"diskAvailable":    diskAvail,
 		"diskTotal":        diskTotal,
 		"tgConfigured":     s.Cfg.AppID > 0 && s.Cfg.AppHash != "",
-		"watchEnabled":     false,
+		"watchEnabled":     watchCount > 0,
+		"watchCount":       watchCount,
+		"watchIntervalMinutes": s.Cfg.ClampWatchInterval(),
 		"dialogCount":      dialogCount,
 		"savedCount":       savedCount,
 		"savedDownloaded":  savedDownloaded,
@@ -220,6 +235,7 @@ func settingsView(c *config.Config) map[string]any {
 		"rewriteExt":   c.RewriteExt,
 		"takeout":      c.Takeout,
 		"noImage":      c.NoImage,
+		"watchIntervalMinutes": c.ClampWatchInterval(),
 		"template":     c.Template,
 		"proxy":        c.Proxy,
 	}
@@ -258,6 +274,10 @@ func applySettings(c *config.Config, body map[string]any) {
 	}
 	if v, ok := body["noImage"].(bool); ok {
 		c.NoImage = v
+	}
+	if v, ok := asInt(body["watchIntervalMinutes"]); ok {
+		c.WatchIntervalMinutes = v
+		c.ClampWatchInterval()
 	}
 	if v, ok := asInt(body["appId"]); ok && v > 0 {
 		c.AppID = v

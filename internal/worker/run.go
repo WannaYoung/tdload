@@ -18,6 +18,7 @@ func (w *Worker) downloadOpts(taskID int64, outSubdir string) tg.DownloadOptions
 		Template:   w.Cfg.Template,
 		GroupAlbum: w.Cfg.GroupAlbum,
 		SkipSame:   w.Cfg.SkipSame,
+		RewriteExt: w.Cfg.RewriteExt,
 		Exists: func(chatID int64, messageID int, size int64) (bool, string, error) {
 			return w.DB.MediaExists(context.Background(), chatID, messageID, size)
 		},
@@ -83,6 +84,7 @@ func (w *Worker) channelDownloadOpts(taskID int64) tg.DownloadOptions {
 		Template:   w.Cfg.Template,
 		GroupAlbum: w.Cfg.GroupAlbum,
 		SkipSame:   w.Cfg.SkipSame,
+		RewriteExt: w.Cfg.RewriteExt,
 		Exists: func(chatID int64, messageID int, size int64) (bool, string, error) {
 			return w.DB.MediaExists(context.Background(), chatID, messageID, size)
 		},
@@ -105,6 +107,8 @@ func (w *Worker) runChatTask(ctx context.Context, task *db.Task) error {
 	chatID, _ := optMap["chatId"].(float64)
 	fromID, _ := optMap["fromMessageId"].(float64)
 	count, _ := optMap["count"].(float64)
+	toID, _ := optMap["toMessageId"].(float64)
+	watchID, _ := optMap["watchId"].(float64)
 	if chatID == 0 {
 		return fmt.Errorf("任务缺少 chatId")
 	}
@@ -126,11 +130,20 @@ func (w *Worker) runChatTask(ctx context.Context, task *db.Task) error {
 	case "chat_continue":
 		mode = "continue"
 		afterID, _ = w.DB.MaxDownloadedMessageID(ctx, int64(chatID))
-	case "chat_batch", "chat_range":
+	case "chat_batch", "chat_range", "watch":
 		mode = "batch"
+		if task.Source == "watch" && count <= 0 && toID >= fromID && fromID > 0 {
+			count = toID - fromID + 1
+		}
 	}
 
 	dlOpt := w.channelDownloadOpts(task.ID)
+	if rawFilter, ok := optMap["filter"].(map[string]any); ok {
+		b, _ := json.Marshal(rawFilter)
+		dlOpt.Filter = tg.ParseMediaFilter(string(b))
+	} else if s, ok := optMap["filter"].(string); ok {
+		dlOpt.Filter = tg.ParseMediaFilter(s)
+	}
 	params := tg.ChatDownloadParams{
 		ChatID:         int64(chatID),
 		Username:       username,
@@ -150,8 +163,79 @@ func (w *Worker) runChatTask(ctx context.Context, task *db.Task) error {
 	if maxID, e := w.DB.MaxTaskItemMessageID(ctx, task.ID); e == nil && maxID > 0 {
 		_ = w.DB.UpsertChatDownloadState(ctx, db.DefaultTGAccountID, int64(chatID), maxID)
 	}
+	if task.Source == "watch" && watchID > 0 {
+		cursor := int(toID)
+		if cursor <= 0 {
+			cursor = int(fromID) + int(count) - 1
+		}
+		if cursor > 0 {
+			_ = w.DB.AdvanceWatchedCursor(ctx, int64(watchID), cursor)
+		}
+	}
 	_ = w.DB.RefreshDialogDownloadCounts(ctx, db.DefaultTGAccountID)
 	w.publishChannelProgress(task.ID)
+	return nil
+}
+
+func (w *Worker) runWatchSavedTask(ctx context.Context, task *db.Task) error {
+	optMap := parseTaskOptions(task.OptionsJSON)
+	watchID, _ := optMap["watchId"].(float64)
+	toID, _ := optMap["toMessageId"].(float64)
+	chatID, _ := optMap["chatId"].(float64)
+	rawIDs, _ := optMap["messageIds"].([]any)
+	ids := make([]int, 0, len(rawIDs))
+	for _, v := range rawIDs {
+		switch n := v.(type) {
+		case float64:
+			ids = append(ids, int(n))
+		case int:
+			ids = append(ids, n)
+		}
+	}
+	if len(ids) == 0 {
+		if watchID > 0 && toID > 0 {
+			_ = w.DB.AdvanceWatchedCursor(ctx, int64(watchID), int(toID))
+		}
+		return nil
+	}
+	favID := int64(chatID)
+	if favID == 0 {
+		selfID := int64(0)
+		if acc, _ := w.DB.GetTGAccount(ctx, db.DefaultTGAccountID); acc != nil {
+			selfID = acc.UserID
+		}
+		if selfID == 0 {
+			if uid, err := w.TG.SelfUserID(ctx); err == nil {
+				selfID = uid
+			}
+		}
+		favID = tg.FavoritesChatID(selfID)
+	}
+	opt := w.downloadOpts(task.ID, tg.FavoritesFolderName)
+	if rawFilter, ok := optMap["filter"].(map[string]any); ok {
+		b, _ := json.Marshal(rawFilter)
+		opt.Filter = tg.ParseMediaFilter(string(b))
+	} else if s, ok := optMap["filter"].(string); ok {
+		opt.Filter = tg.ParseMediaFilter(s)
+	}
+	baseOnItem := opt.OnItem
+	opt.OnItem = func(cID int64, messageID int, status, fileName, localPath, errMsg string) {
+		if baseOnItem != nil {
+			baseOnItem(cID, messageID, status, fileName, localPath, errMsg)
+		}
+		w.publishTaskCounts(task.ID, "saved")
+	}
+	opt.OnProgress = func(doneFiles, totalFiles int, fileName string) {
+		w.publishTaskCounts(task.ID, "saved")
+	}
+	err := w.TG.DownloadSaved(ctx, opt, favID, ids)
+	if err != nil {
+		return err
+	}
+	if watchID > 0 && toID > 0 {
+		_ = w.DB.AdvanceWatchedCursor(ctx, int64(watchID), int(toID))
+	}
+	w.publishTaskCounts(task.ID, "saved")
 	return nil
 }
 

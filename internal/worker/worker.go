@@ -181,8 +181,10 @@ func (w *Worker) runOne(parent context.Context, id int64) {
 			w.publishTaskCounts(id, "saved")
 		}
 		err = w.TG.DownloadSaved(ctx, opt, favID, ids)
-	case "chat_batch", "chat_continue", "chat_range":
+	case "chat_batch", "chat_continue", "chat_range", "watch":
 		err = w.runChatTask(ctx, task)
+	case "watch_saved":
+		err = w.runWatchSavedTask(ctx, task)
 	default:
 		opt := w.downloadOpts(id, "")
 		opt.URLs = task.URLs
@@ -228,7 +230,7 @@ func (w *Worker) runOne(parent context.Context, id int64) {
 		doneFiles, totalFiles = final.DoneFiles, final.TotalFiles
 	}
 	// 频道任务可能仅跳过/无新媒体，以 item 计数为准
-	if task.Source == "chat_batch" || task.Source == "chat_continue" || task.Source == "chat_range" {
+	if task.Source == "chat_batch" || task.Source == "chat_continue" || task.Source == "chat_range" || task.Source == "watch" || task.Source == "watch_saved" {
 		if counts, e := w.DB.TaskItemCounts(context.Background(), id); e == nil {
 			totalFiles = counts.Pending + counts.Downloading + counts.Done + counts.Skipped + counts.Failed
 			doneFiles = counts.Done + counts.Skipped

@@ -83,7 +83,7 @@ func (m *Manager) DownloadChat(ctx context.Context, opt DownloadOptions, p ChatD
 	}
 
 	return m.Run(ctx, func(ctx context.Context, client *telegram.Client) error {
-		api := client.API()
+		return m.withAPI(ctx, client, func(ctx context.Context, api *tg.Client) error {
 		peer, err := resolveChatPeer(ctx, api, p.ChatID, p.Username)
 		if err != nil {
 			return err
@@ -140,6 +140,17 @@ func (m *Manager) DownloadChat(ctx context.Context, opt DownloadOptions, p ChatD
 			}
 
 			size := mediaSize(msg)
+			caption := msg.Message
+			if !opt.Filter.Match(file.Name, size, caption) {
+				done++
+				if opt.OnItem != nil {
+					opt.OnItem(chatID, msg.ID, "skipped", file.Name, "", "过滤规则跳过")
+				}
+				if opt.OnProgress != nil {
+					opt.OnProgress(done, total, file.Name+" (过滤)")
+				}
+				continue
+			}
 			if opt.SkipSame && opt.Exists != nil && size > 0 {
 				if exists, path, err := opt.Exists(chatID, msg.ID, size); err == nil && exists {
 					if opt.OnItem != nil {
@@ -156,7 +167,11 @@ func (m *Manager) DownloadChat(ctx context.Context, opt DownloadOptions, p ChatD
 				}
 			}
 
-			name, err := renderFileName(tpl, chatID, msg.ID, msg, file.Name, size)
+			rawName := file.Name
+			if opt.RewriteExt {
+				rawName = rewriteExtByMIME(rawName, file.MIMEType)
+			}
+			name, err := renderFileName(tpl, chatID, msg.ID, msg, rawName, size)
 			if err != nil {
 				return err
 			}
@@ -205,6 +220,7 @@ func (m *Manager) DownloadChat(ctx context.Context, opt DownloadOptions, p ChatD
 			slog.Info("downloaded", "file", name, "path", path)
 		}
 		return nil
+		})
 	})
 }
 

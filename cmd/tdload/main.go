@@ -18,6 +18,7 @@ import (
 	"tdload/internal/progress"
 	"tdload/internal/static"
 	"tdload/internal/tg"
+	"tdload/internal/watcher"
 	"tdload/internal/worker"
 )
 
@@ -53,6 +54,8 @@ func main() {
 	wrk := worker.New(cfg, database, tgMgr, hub)
 	workerCtx, workerCancel := context.WithCancel(context.Background())
 	wrk.Start(workerCtx)
+	watch := watcher.New(cfg, database, tgMgr, wrk, hub)
+	watch.Start(workerCtx)
 
 	srvAPI := &api.Server{Cfg: cfg, DB: database, TG: tgMgr, Hub: hub, Worker: wrk}
 	mux := http.NewServeMux()

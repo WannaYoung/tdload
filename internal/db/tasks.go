@@ -101,9 +101,9 @@ func sourcesForKind(kind string) []string {
 	case "message":
 		return []string{"url"}
 	case "saved":
-		return []string{"saved_all"}
+		return []string{"saved_all", "watch_saved"}
 	case "channel":
-		return []string{"chat_continue", "chat_batch", "chat_range"}
+		return []string{"chat_continue", "chat_batch", "chat_range", "watch"}
 	default:
 		return nil
 	}
@@ -157,6 +157,33 @@ FROM tasks WHERE source IN (`, sources)
 
 func (d *DB) ListQueuedTaskIDs(ctx context.Context) ([]int64, error) {
 	rows, err := d.SQL.QueryContext(ctx, `SELECT id FROM tasks WHERE status IN ('queued','running') ORDER BY id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ids []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
+func (d *DB) PauseAllActiveTasks(ctx context.Context) (int64, error) {
+	res, err := d.SQL.ExecContext(ctx, `
+UPDATE tasks SET status='paused', error='批量暂停'
+WHERE status IN ('queued','running')`)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
+func (d *DB) ListPausedTaskIDs(ctx context.Context) ([]int64, error) {
+	rows, err := d.SQL.QueryContext(ctx, `SELECT id FROM tasks WHERE status='paused' ORDER BY id`)
 	if err != nil {
 		return nil, err
 	}

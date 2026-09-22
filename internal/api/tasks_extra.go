@@ -130,6 +130,36 @@ func (s *Server) handleRetryFailedTask(w http.ResponseWriter, r *http.Request) {
 	writeOK(w, map[string]any{"ok": true, "retried": n})
 }
 
+func (s *Server) handlePauseAllTasks(w http.ResponseWriter, r *http.Request) {
+	ids, _ := s.DB.ListQueuedTaskIDs(r.Context())
+	if s.Worker != nil {
+		for _, id := range ids {
+			s.Worker.Pause(id)
+		}
+	}
+	n, err := s.DB.PauseAllActiveTasks(r.Context())
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeOK(w, map[string]any{"ok": true, "paused": n})
+}
+
+func (s *Server) handleStartAllTasks(w http.ResponseWriter, r *http.Request) {
+	ids, err := s.DB.ListPausedTaskIDs(r.Context())
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	for _, id := range ids {
+		_ = s.DB.UpdateTaskStatus(r.Context(), id, "queued", "")
+		if s.Worker != nil {
+			s.Worker.Enqueue(id)
+		}
+	}
+	writeOK(w, map[string]any{"ok": true, "started": len(ids)})
+}
+
 func taskItemViews(items []db.TaskItem) []map[string]any {
 	out := make([]map[string]any, 0, len(items))
 	for _, it := range items {

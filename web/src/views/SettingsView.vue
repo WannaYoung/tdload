@@ -14,6 +14,7 @@ import {
 import {
   CloudDownloadOutline,
   DesktopOutline,
+  EyeOutline,
   GlobeOutline,
   InformationCircleOutline,
   SaveOutline,
@@ -28,6 +29,12 @@ const isMobile = useMobile();
 const message = useMessage();
 const loading = ref(false);
 const saving = ref(false);
+const about = reactive({
+  version: "",
+  license: "",
+  sourceUrl: "",
+  notice: "",
+});
 
 const form = reactive({
   downloadDir: "",
@@ -40,6 +47,7 @@ const form = reactive({
   rewriteExt: false,
   takeout: false,
   noImage: false,
+  watchIntervalMinutes: 30,
   appId: 0,
   appHashSet: false,
   usingDesktopPreset: false,
@@ -52,7 +60,10 @@ const form = reactive({
 async function load() {
   loading.value = true;
   try {
-    const s = await api<Settings>("/api/settings");
+    const [s, aboutData] = await Promise.all([
+      api<Settings>("/api/settings"),
+      api<{ version: string; license: string; sourceUrl: string; notice: string }>("/api/about").catch(() => null),
+    ]);
     Object.assign(form, {
       downloadDir: s.downloadDir,
       proxy: s.proxy,
@@ -64,6 +75,7 @@ async function load() {
       rewriteExt: s.rewriteExt,
       takeout: s.takeout,
       noImage: !!s.noImage,
+      watchIntervalMinutes: s.watchIntervalMinutes || 30,
       appId: s.appId,
       appHashSet: s.appHashSet,
       usingDesktopPreset: !!s.usingDesktopPreset,
@@ -72,6 +84,12 @@ async function load() {
       sessionDir: s.sessionDir,
       webDir: s.webDir,
     });
+    if (aboutData) {
+      about.version = aboutData.version || "";
+      about.license = aboutData.license || "";
+      about.sourceUrl = aboutData.sourceUrl || "";
+      about.notice = aboutData.notice || "";
+    }
     applyNoImageSetting(form.noImage);
   } catch (e) {
     message.error(e instanceof Error ? e.message : "加载失败");
@@ -96,9 +114,11 @@ async function save() {
         rewriteExt: form.rewriteExt,
         takeout: form.takeout,
         noImage: form.noImage,
+        watchIntervalMinutes: form.watchIntervalMinutes,
       }),
     });
     applyNoImageSetting(!!s.noImage);
+    if (s.watchIntervalMinutes) form.watchIntervalMinutes = s.watchIntervalMinutes;
     message.success("已保存");
     await load();
   } catch (e) {
@@ -166,7 +186,30 @@ onMounted(() => void load());
       <n-form-item label="Takeout">
         <n-switch v-model:value="form.takeout" />
       </n-form-item>
-      <p class="hint" :class="{ mobile: isMobile }">纠正扩展名 / Takeout 已写入配置，下载引擎尚未完全接入（见文档 M6）。</p>
+      <p class="hint" :class="{ mobile: isMobile }">
+        Takeout 启用后大批量下载更不易触发 FloodWait；纠正扩展名按 MIME 写回文件后缀。
+      </p>
+    </section>
+
+    <section class="settings-section sec-watch">
+      <div class="section-head">
+        <h3 class="section-title">
+          <n-icon class="section-icon" :component="EyeOutline" :size="18" :color="sectionHeadColor" />
+          监听
+        </h3>
+      </div>
+      <n-form-item label="执行间隔（分钟）">
+        <n-input-number
+          v-model:value="form.watchIntervalMinutes"
+          :min="10"
+          :max="300"
+          :step="5"
+          class="num"
+        />
+      </n-form-item>
+      <p class="hint" :class="{ mobile: isMobile }">
+        默认 30 分钟，范围 10–300。仅下载加入监听后新增区间内的消息（含端点），下载前按索引去重。
+      </p>
     </section>
 
     <section class="settings-section sec-proxy">
@@ -202,6 +245,18 @@ onMounted(() => void load());
       <n-form-item label="Session 目录">
         <n-input :value="form.sessionDir" readonly />
       </n-form-item>
+      <n-form-item label="版本">
+        <div class="info-row">
+          <span>{{ about.version || "—" }}</span>
+          <n-tag size="small" type="info">{{ about.license || "AGPL-3.0" }}</n-tag>
+        </div>
+      </n-form-item>
+      <n-form-item label="源码">
+        <a v-if="about.sourceUrl" class="source-link" :href="about.sourceUrl" target="_blank" rel="noopener">
+          {{ about.sourceUrl }}
+        </a>
+        <span v-else>—</span>
+      </n-form-item>
       <n-form-item label="App ID">
         <div class="info-row">
           <span>{{ form.appId || "未设置" }}</span>
@@ -210,7 +265,10 @@ onMounted(() => void load());
           <n-tag v-else size="small" type="warning">Hash 未设置</n-tag>
         </div>
       </n-form-item>
-      <p class="hint" :class="{ mobile: isMobile }">API 凭证请在 Telegram 页或环境变量 TG_APP_ID / TG_APP_HASH 修改。</p>
+      <p class="hint" :class="{ mobile: isMobile }">
+        API 凭证请在 Telegram 页或环境变量 TG_APP_ID / TG_APP_HASH 修改。
+        {{ about.notice || "" }}
+      </p>
     </section>
 
     <div class="form-actions">
@@ -283,6 +341,14 @@ onMounted(() => void load());
   gap: 8px;
   font-size: 14px;
 }
+.source-link {
+  color: #f472b6;
+  word-break: break-all;
+  text-decoration: none;
+}
+.source-link:hover {
+  text-decoration: underline;
+}
 .form-actions {
   margin-top: 0;
 }
@@ -292,6 +358,7 @@ onMounted(() => void load());
     grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
     grid-template-areas:
       "ui download"
+      "watch download"
       "proxy download"
       "info download"
       "actions actions";
@@ -301,6 +368,9 @@ onMounted(() => void load());
   }
   .sec-download {
     grid-area: download;
+  }
+  .sec-watch {
+    grid-area: watch;
   }
   .sec-proxy {
     grid-area: proxy;

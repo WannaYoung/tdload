@@ -32,6 +32,7 @@ type Config struct {
 	RewriteExt   bool   `yaml:"rewrite_ext"`
 	Takeout      bool   `yaml:"takeout"`
 	NoImage      bool   `yaml:"no_image"` // 界面：资源库等不加载预览图
+	WatchIntervalMinutes int `yaml:"watch_interval_minutes"` // 监听轮询间隔（分钟）
 	Template     string `yaml:"template"`
 	Proxy        string `yaml:"proxy"`
 	JWTSecret    string `yaml:"jwt_secret"`
@@ -49,6 +50,7 @@ func Default() *Config {
 		Concurrency: 4,
 		SkipSame:    true,
 		GroupAlbum:  true,
+		WatchIntervalMinutes: 30,
 		Template:    "{{ .DialogID }}_{{ .MessageID }}_{{ .FileName }}",
 	}
 }
@@ -80,10 +82,27 @@ func Load(path string) (*Config, error) {
 	if err := cfg.ensureDirs(); err != nil {
 		return nil, err
 	}
+	cfg.ClampWatchInterval()
 	return cfg, nil
 }
 
 func (c *Config) Path() string { return c.path }
+
+// ClampWatchInterval 将监听间隔限制在 10–300 分钟。
+func (c *Config) ClampWatchInterval() int {
+	v := c.WatchIntervalMinutes
+	if v <= 0 {
+		v = 30
+	}
+	if v < 10 {
+		v = 10
+	}
+	if v > 300 {
+		v = 300
+	}
+	c.WatchIntervalMinutes = v
+	return v
+}
 
 func (c *Config) Save() error {
 	if c.path == "" {

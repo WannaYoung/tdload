@@ -128,6 +128,8 @@ CREATE TABLE IF NOT EXISTS watched_chats (
   enabled INTEGER NOT NULL DEFAULT 1,
   last_message_id INTEGER NOT NULL DEFAULT 0,
   filter_json TEXT NOT NULL DEFAULT '{}',
+  last_run_at TEXT NOT NULL DEFAULT '',
+  next_run_at TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   UNIQUE(tg_account_id, chat_id)
@@ -164,7 +166,31 @@ CREATE TABLE IF NOT EXISTS chat_download_state (
   PRIMARY KEY (tg_account_id, chat_id)
 );
 `)
-	return err
+	if err != nil {
+		return err
+	}
+	return d.ensureWatchColumns()
+}
+
+func (d *DB) ensureWatchColumns() error {
+	cols := []struct{ name, ddl string }{
+		{"last_run_at", `ALTER TABLE watched_chats ADD COLUMN last_run_at TEXT NOT NULL DEFAULT ''`},
+		{"next_run_at", `ALTER TABLE watched_chats ADD COLUMN next_run_at TEXT NOT NULL DEFAULT ''`},
+	}
+	for _, c := range cols {
+		var n int
+		err := d.SQL.QueryRow(`SELECT COUNT(1) FROM pragma_table_info('watched_chats') WHERE name=?`, c.name).Scan(&n)
+		if err != nil {
+			return err
+		}
+		if n > 0 {
+			continue
+		}
+		if _, err := d.SQL.Exec(c.ddl); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 type UserRow struct {

@@ -32,6 +32,8 @@ type DownloadOptions struct {
 	Template   string
 	GroupAlbum bool
 	SkipSame   bool
+	RewriteExt bool
+	Filter     MediaFilter
 	OnProgress DownloadProgress
 	Exists     func(chatID int64, messageID int, size int64) (bool, string, error)
 	OnFile     func(chatID int64, messageID int, fileName string, size int64, path, mime string) error
@@ -123,7 +125,7 @@ func (m *Manager) DownloadURLs(ctx context.Context, opt DownloadOptions) error {
 	}
 
 	return m.Run(ctx, func(ctx context.Context, client *telegram.Client) error {
-		api := client.API()
+		return m.withAPI(ctx, client, func(ctx context.Context, api *tg.Client) error {
 		manager := peers.Options{}.Build(api)
 		dl := downloader.NewDownloader()
 
@@ -196,6 +198,21 @@ func (m *Manager) DownloadURLs(ctx context.Context, opt DownloadOptions) error {
 			}
 
 			size := mediaSize(j.msg)
+			caption := ""
+			if j.msg != nil {
+				caption = j.msg.Message
+			}
+			if !opt.Filter.Match(file.Name, size, caption) {
+				skipped++
+				done++
+				if opt.OnItem != nil {
+					opt.OnItem(j.chatID, j.msgID, "skipped", file.Name, "", "过滤规则跳过")
+				}
+				if opt.OnProgress != nil {
+					opt.OnProgress(done, total, file.Name+" (过滤)")
+				}
+				continue
+			}
 			if opt.SkipSame && opt.Exists != nil && size > 0 {
 				if exists, path, err := opt.Exists(j.chatID, j.msgID, size); err == nil && exists {
 					if opt.OnItem != nil {
@@ -213,7 +230,11 @@ func (m *Manager) DownloadURLs(ctx context.Context, opt DownloadOptions) error {
 				}
 			}
 
-			name, err := renderFileName(tpl, j.chatID, j.msgID, j.msg, file.Name, size)
+			rawName := file.Name
+			if opt.RewriteExt {
+				rawName = rewriteExtByMIME(rawName, file.MIMEType)
+			}
+			name, err := renderFileName(tpl, j.chatID, j.msgID, j.msg, rawName, size)
 			if err != nil {
 				return err
 			}
@@ -266,6 +287,7 @@ func (m *Manager) DownloadURLs(ctx context.Context, opt DownloadOptions) error {
 			return fmt.Errorf("未下载到任何文件（共 %d 条消息，跳过 %d）", total, skipped)
 		}
 		return nil
+		})
 	})
 }
 
