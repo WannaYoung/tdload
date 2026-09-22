@@ -25,7 +25,7 @@ import (
 func main() {
 	_ = godotenv.Load()
 
-	cfgPath := envOr("CONFIG_PATH", "config/config.yaml")
+	cfgPath := envOr("CONFIG_PATH", "./config/config.yaml")
 	if abs, err := filepath.Abs(cfgPath); err == nil {
 		cfgPath = abs
 	}

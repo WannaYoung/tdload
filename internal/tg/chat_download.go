@@ -9,7 +9,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"text/template"
 	"time"
 
 	"github.com/go-faster/errors"
@@ -37,9 +36,10 @@ type ChatDownloadParams struct {
 }
 
 // DownloadChat 按 chat_batch / chat_continue 扫描历史并下载媒体。
-func (m *Manager) DownloadChat(ctx context.Context, opt DownloadOptions, p ChatDownloadParams) error {
+// 返回 scanEnd：本批应推进的扫描水位；0 表示无推进。
+func (m *Manager) DownloadChat(ctx context.Context, opt DownloadOptions, p ChatDownloadParams) (int, error) {
 	if p.ChatID == 0 {
-		return fmt.Errorf("缺少 chat_id")
+		return 0, fmt.Errorf("缺少 chat_id")
 	}
 	if opt.OutDir == "" {
 		opt.OutDir = m.Cfg.DownloadDir
@@ -57,22 +57,14 @@ func (m *Manager) DownloadChat(ctx context.Context, opt DownloadOptions, p ChatD
 		opt.Template = m.Cfg.Template
 	}
 	if opt.Template == "" {
-		opt.Template = "{{ .DialogID }}_{{ .MessageID }}_{{ .FileName }}"
-	}
-	tpl, err := template.New("dl").Funcs(template.FuncMap{
-		"filenamify": func(s string, _ ...int) string { return safeFileName(s) },
-		"upper":      strings.ToUpper,
-		"lower":      strings.ToLower,
-	}).Parse(opt.Template)
-	if err != nil {
-		return errors.Wrap(err, "解析文件名模板")
+		opt.Template = DefaultFileTemplate
 	}
 	if p.MaxMedia <= 0 {
-		p.MaxMedia = 5000
+		p.MaxMedia = 500
 	}
 	if p.Mode == "batch" {
 		if p.FromMessageID <= 0 {
-			return fmt.Errorf("请指定起始 message id")
+			return 0, fmt.Errorf("请指定起始 message id")
 		}
 		if p.Count <= 0 {
 			p.Count = 50
@@ -82,7 +74,8 @@ func (m *Manager) DownloadChat(ctx context.Context, opt DownloadOptions, p ChatD
 		}
 	}
 
-	return m.Run(ctx, func(ctx context.Context, client *telegram.Client) error {
+	scanEnd := 0
+	err := m.Run(ctx, func(ctx context.Context, client *telegram.Client) error {
 		return m.withAPI(ctx, client, func(ctx context.Context, api *tg.Client) error {
 		peer, err := resolveChatPeer(ctx, api, p.ChatID, p.Username)
 		if err != nil {
@@ -94,11 +87,12 @@ func (m *Manager) DownloadChat(ctx context.Context, opt DownloadOptions, p ChatD
 		}
 		chatID := peer.ID()
 
-		jobs, err := collectChatMedia(ctx, api, peer, p)
+		jobs, end, err := collectChatMedia(ctx, api, peer, p)
 		if err != nil {
 			return err
 		}
-		slog.Info("chat download jobs", "chat", chatID, "mode", p.Mode, "jobs", len(jobs))
+		scanEnd = end
+		slog.Info("chat download jobs", "chat", chatID, "mode", p.Mode, "jobs", len(jobs), "scanEnd", end)
 
 		if len(jobs) == 0 {
 			if opt.OnProgress != nil {
@@ -140,17 +134,6 @@ func (m *Manager) DownloadChat(ctx context.Context, opt DownloadOptions, p ChatD
 			}
 
 			size := mediaSize(msg)
-			caption := msg.Message
-			if !opt.Filter.Match(file.Name, size, caption) {
-				done++
-				if opt.OnItem != nil {
-					opt.OnItem(chatID, msg.ID, "skipped", file.Name, "", "过滤规则跳过")
-				}
-				if opt.OnProgress != nil {
-					opt.OnProgress(done, total, file.Name+" (过滤)")
-				}
-				continue
-			}
 			if opt.SkipSame && opt.Exists != nil && size > 0 {
 				if exists, path, err := opt.Exists(chatID, msg.ID, size); err == nil && exists {
 					if opt.OnItem != nil {
@@ -171,10 +154,7 @@ func (m *Manager) DownloadChat(ctx context.Context, opt DownloadOptions, p ChatD
 			if opt.RewriteExt {
 				rawName = rewriteExtByMIME(rawName, file.MIMEType)
 			}
-			name, err := renderFileName(tpl, chatID, msg.ID, msg, rawName, size)
-			if err != nil {
-				return err
-			}
+			name := renderFileName(opt.Template, chatID, msg.ID, msg, rawName, size)
 			chatDir := filepath.Join(opt.OutDir, chatFolderName(chatID, chatName))
 			if err := os.MkdirAll(chatDir, 0o755); err != nil {
 				return err
@@ -187,7 +167,7 @@ func (m *Manager) DownloadChat(ctx context.Context, opt DownloadOptions, p ChatD
 
 			slog.Info("downloading", "file", name, "path", path, "size", size, "threads", threads)
 			fileCtx, cancel := context.WithTimeout(ctx, 30*time.Minute)
-			_, err = dl.Download(api, file.Location).WithThreads(threads).ToPath(fileCtx, path)
+			_, err := dl.Download(api, file.Location).WithThreads(threads).ToPath(fileCtx, path)
 			cancel()
 			if err != nil {
 				_ = os.Remove(path)
@@ -222,78 +202,113 @@ func (m *Manager) DownloadChat(ctx context.Context, opt DownloadOptions, p ChatD
 		return nil
 		})
 	})
+	return scanEnd, err
 }
 
-func collectChatMedia(ctx context.Context, api *tg.Client, peer peers.Peer, p ChatDownloadParams) ([]*tg.Message, error) {
+func collectChatMedia(ctx context.Context, api *tg.Client, peer peers.Peer, p ChatDownloadParams) ([]*tg.Message, int, error) {
 	input := peer.InputPeer()
 	seen := map[int]struct{}{}
 	var out []*tg.Message
+	scanEnd := 0
 
 	switch p.Mode {
 	case "batch":
 		from := p.FromMessageID
 		to := from + p.Count - 1
-		iter := messages.NewQueryBuilder(api).GetHistory(input).BatchSize(100).OffsetID(to + 1).Iter()
-		for iter.Next(ctx) {
-			msg, ok := iter.Value().Msg.(*tg.Message)
-			if !ok {
-				continue
-			}
-			if msg.ID < from {
-				break
-			}
-			if msg.ID > to {
-				continue
-			}
-			if !tutil.FileExists(msg) {
-				continue
-			}
-			if _, ok := seen[msg.ID]; ok {
-				continue
-			}
-			seen[msg.ID] = struct{}{}
-			out = append(out, msg)
+		chunk, err := fetchMediaInRange(ctx, api, input, from, to, seen)
+		if err != nil {
+			return nil, 0, err
 		}
-		if err := iter.Err(); err != nil {
-			return nil, errors.Wrap(err, "扫描频道历史")
-		}
-	default: // continue
+		out = chunk
+		scanEnd = to
+	default: // continue：从水位之后向前填充，避免只抓「最新 N 条」漏掉中间历史
 		after := p.AfterMessageID
-		qb := messages.NewQueryBuilder(api).GetHistory(input).BatchSize(100)
-		if p.LastMessageID > 0 {
-			qb = qb.OffsetID(p.LastMessageID + 1)
+		maxMedia := p.MaxMedia
+		if maxMedia <= 0 {
+			maxMedia = 500
 		}
-		iter := qb.Iter()
-		for iter.Next(ctx) {
-			msg, ok := iter.Value().Msg.(*tg.Message)
-			if !ok {
-				continue
-			}
-			if after > 0 && msg.ID <= after {
+		latest := p.LastMessageID
+		from := after + 1
+		if latest > 0 && from > latest {
+			return nil, latest, nil
+		}
+		window := maxMedia * 8
+		if window < 400 {
+			window = 400
+		}
+		if window > 3000 {
+			window = 3000
+		}
+		scanEnd = after
+		for len(out) < maxMedia {
+			if latest > 0 && from > latest {
+				scanEnd = latest
 				break
 			}
-			if !tutil.FileExists(msg) {
-				continue
+			to := from + window - 1
+			if latest > 0 && to > latest {
+				to = latest
 			}
-			if _, ok := seen[msg.ID]; ok {
-				continue
+			chunk, err := fetchMediaInRange(ctx, api, input, from, to, seen)
+			if err != nil {
+				return nil, scanEnd, err
 			}
-			seen[msg.ID] = struct{}{}
-			out = append(out, msg)
-			if len(out) >= p.MaxMedia {
+			out = append(out, chunk...)
+			if len(out) >= maxMedia {
+				sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+				out = out[:maxMedia]
+				scanEnd = out[len(out)-1].ID
 				break
 			}
-		}
-		if err := iter.Err(); err != nil {
-			return nil, errors.Wrap(err, "扫描未下载历史")
+			scanEnd = to
+			if latest > 0 && to >= latest {
+				break
+			}
+			if to < from {
+				break
+			}
+			from = to + 1
 		}
 	}
 
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	if !p.GroupAlbum {
-		return out, nil
+		return out, scanEnd, nil
 	}
-	return expandAlbums(ctx, api, input, out)
+	expanded, err := expandAlbums(ctx, api, input, out)
+	return expanded, scanEnd, err
+}
+
+func fetchMediaInRange(ctx context.Context, api *tg.Client, input tg.InputPeerClass, from, to int, seen map[int]struct{}) ([]*tg.Message, error) {
+	if from <= 0 || to < from {
+		return nil, nil
+	}
+	var out []*tg.Message
+	iter := messages.NewQueryBuilder(api).GetHistory(input).BatchSize(100).OffsetID(to + 1).Iter()
+	for iter.Next(ctx) {
+		msg, ok := iter.Value().Msg.(*tg.Message)
+		if !ok {
+			continue
+		}
+		if msg.ID < from {
+			break
+		}
+		if msg.ID > to {
+			continue
+		}
+		if !tutil.FileExists(msg) {
+			continue
+		}
+		if _, ok := seen[msg.ID]; ok {
+			continue
+		}
+		seen[msg.ID] = struct{}{}
+		out = append(out, msg)
+	}
+	if err := iter.Err(); err != nil {
+		return nil, errors.Wrap(err, "扫描频道历史")
+	}
+	return out, nil
 }
 
 func expandAlbums(ctx context.Context, api *tg.Client, peer tg.InputPeerClass, msgs []*tg.Message) ([]*tg.Message, error) {

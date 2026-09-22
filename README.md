@@ -1,4 +1,4 @@
-# tdload
+# TDLoad
 
 自托管 Telegram 批量下载与监控控制台（Web）：登录管理、任务队列、进度监控；二期支持频道/群监听自动入队。后端 Go + [iyear/tdl](https://github.com/iyear/tdl)，前端 Vue（深色 + 粉色高亮，布局对齐 xtools）；Docker 支持 `linux/amd64` / `linux/arm64`。
 

@@ -161,6 +161,8 @@ func (s *Server) handleDeleteLibrary(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	_ = s.DB.SyncScanCursorForChat(r.Context(), db.DefaultTGAccountID, row.ChatID)
+	_ = s.DB.RefreshDialogDownloadCounts(r.Context(), db.DefaultTGAccountID)
 	writeOK(w, map[string]any{"ok": true, "deletedFile": deleteFile})
 }
 

@@ -91,7 +91,7 @@ func (m *Manager) newClient() (*telegram.Client, error) {
 	}
 
 	device := telegram.DeviceConfig{
-		DeviceModel:    "tdload",
+		DeviceModel:    "TDLoad",
 		SystemVersion:  "1.0",
 		AppVersion:     "0.1.0",
 		LangCode:       "zh",

@@ -33,7 +33,15 @@ func (s *Server) handleListChannels(w http.ResponseWriter, r *http.Request) {
 	}
 	views := make([]map[string]any, 0, len(items))
 	for _, d := range items {
-		lastDL, _ := s.DB.MaxDownloadedMessageID(r.Context(), d.ChatID)
+		lastDL, _ := s.DB.GetScanCursor(r.Context(), db.DefaultTGAccountID, d.ChatID)
+		caughtUp := d.LastMessageID > 0 && lastDL >= d.LastMessageID
+		busy, _, _ := s.DB.HasActiveChannelTask(r.Context(), d.ChatID)
+		status := "idle"
+		if busy {
+			status = "running"
+		} else if caughtUp {
+			status = "caught_up"
+		}
 		views = append(views, map[string]any{
 			"chatId":                  d.ChatID,
 			"title":                   d.Title,
@@ -43,6 +51,9 @@ func (s *Server) handleListChannels(w http.ResponseWriter, r *http.Request) {
 			"downloadedCount":         d.DownloadedCount,
 			"lastMessageId":           d.LastMessageID,
 			"lastDownloadedMessageId": lastDL,
+			"scanCursor":              lastDL,
+			"caughtUp":                caughtUp,
+			"status":                  status,
 			"syncedAt":                d.SyncedAt,
 		})
 	}

@@ -54,6 +54,10 @@ func (s *Server) handleCreateTasks(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusBadRequest, "请选择频道")
 			return
 		}
+		if ok, id, _ := s.DB.HasActiveChannelTask(r.Context(), body.ChatID); ok {
+			writeErr(w, http.StatusConflict, fmt.Sprintf("该频道已有进行中的下载任务 #%d", id))
+			return
+		}
 		if source == "chat_batch" {
 			if body.FromMessageID <= 0 {
 				writeErr(w, http.StatusBadRequest, "请填写起始 message id")
@@ -62,6 +66,9 @@ func (s *Server) handleCreateTasks(w http.ResponseWriter, r *http.Request) {
 			if body.Count <= 0 {
 				body.Count = 50
 			}
+		}
+		if source == "chat_continue" && body.Count <= 0 {
+			body.Count = 500
 		}
 		opt, _ := json.Marshal(map[string]any{
 			"chatId": body.ChatID, "fromMessageId": body.FromMessageID, "count": body.Count,
@@ -211,11 +218,13 @@ func (s *Server) handleDeleteTask(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleClearCompleted(w http.ResponseWriter, r *http.Request) {
-	if err := s.DB.ClearCompletedTasks(r.Context()); err != nil {
+	kind := r.URL.Query().Get("kind")
+	n, err := s.DB.ClearCompletedTasks(r.Context(), kind)
+	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeOK(w, map[string]any{"ok": true})
+	writeOK(w, map[string]any{"ok": true, "cleared": n})
 }
 
 func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {

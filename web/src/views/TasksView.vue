@@ -1,15 +1,12 @@
 <script setup lang="ts">
 import { computed, h, onMounted, onUnmounted, ref, watch } from "vue";
-import { useRoute } from "vue-router";
+import { useRoute, useRouter } from "vue-router";
 import {
   NButton,
   NDataTable,
   NEmpty,
   NIcon,
   NInput,
-  NInputNumber,
-  NProgress,
-  NSelect,
   NTag,
   useMessage,
   type DataTableColumns,
@@ -23,7 +20,7 @@ import {
 } from "@vicons/ionicons5";
 import { api, openEventSource } from "../api/http";
 import { useMobile } from "../composables/useMobile";
-import type { ChannelRow, ItemCounts, TaskItemRow } from "../api/types";
+import type { ItemCounts, TaskItemRow } from "../api/types";
 
 defineOptions({ name: "TasksView" });
 
@@ -44,9 +41,10 @@ type Task = {
 };
 
 const route = useRoute();
+const router = useRouter();
 const message = useMessage();
 const isMobile = useMobile();
-const tab = ref<"message" | "saved" | "channel">("message");
+const tab = ref<"message" | "saved">("message");
 const loading = ref(false);
 const submitting = ref(false);
 const clearing = ref(false);
@@ -57,18 +55,12 @@ const messageDone = ref(0);
 const messagePage = ref(1);
 const messagePageSize = 50;
 const savedTasks = ref<Task[]>([]);
-const channelTasks = ref<Task[]>([]);
-const channels = ref<ChannelRow[]>([]);
-const channelChatId = ref<number | null>(null);
-const fromMsgId = ref<number | null>(null);
-const batchCount = ref(50);
 let es: EventSource | null = null;
 let pollTimer: number | null = null;
 
 const tabOptions = [
   { name: "message" as const, label: "消息下载" },
   { name: "saved" as const, label: "收藏同步" },
-  { name: "channel" as const, label: "频道下载" },
 ];
 
 const statusLabel: Record<string, string> = {
@@ -82,26 +74,6 @@ const statusLabel: Record<string, string> = {
   paused: "暂停",
   cancelled: "取消",
 };
-
-const statusColor = computed(() => (s: string) => {
-  switch (s) {
-    case "running":
-    case "downloading":
-      return "success";
-    case "queued":
-    case "pending":
-      return "info";
-    case "failed":
-      return "error";
-    case "paused":
-      return "warning";
-    case "done":
-    case "skipped":
-      return "default";
-    default:
-      return "default";
-  }
-});
 
 const statusTagColor: Record<string, { color: string; textColor: string; borderColor: string }> = {
   downloading: { color: "rgba(244, 114, 182, 0.16)", textColor: "#f9a8d4", borderColor: "transparent" },
@@ -119,11 +91,6 @@ const pinkTag = {
   textColor: "#f9a8d4",
   borderColor: "transparent",
 };
-
-function pct(done: number, total: number, status: string) {
-  if (!total) return status === "done" ? 100 : 0;
-  return Math.min(100, Math.round((done / total) * 100));
-}
 
 function renderStatus(status: string) {
   const color = statusTagColor[status] || {
@@ -187,6 +154,23 @@ async function clearCompletedMessages() {
   }
 }
 
+async function clearCompletedSaved() {
+  clearing.value = true;
+  try {
+    const res = await api<{ cleared: number }>("/api/tasks/completed?kind=saved", { method: "DELETE" });
+    message.success(res.cleared ? `已清除 ${res.cleared} 条记录` : "没有可清除的已结束记录");
+    await loadSavedTasks();
+  } catch (e) {
+    message.error(e instanceof Error ? e.message : "清除失败");
+  } finally {
+    clearing.value = false;
+  }
+}
+
+const savedCompletedCount = computed(
+  () => savedTasks.value.filter((t) => t.status === "done" || t.status === "cancelled" || t.status === "failed").length,
+);
+
 const messageColumns = computed<DataTableColumns<TaskItemRow>>(() => [
   {
     title: "频道",
@@ -238,15 +222,6 @@ const messageColumns = computed<DataTableColumns<TaskItemRow>>(() => [
   },
 ]);
 
-async function loadChannels() {
-  try {
-    const data = await api<{ items: ChannelRow[] }>("/api/channels?page=1&pageSize=500");
-    channels.value = data.items || [];
-  } catch {
-    /* ignore */
-  }
-}
-
 async function loadMessageItems() {
   loading.value = true;
   try {
@@ -273,24 +248,6 @@ async function loadSavedTasks() {
   } finally {
     loading.value = false;
   }
-}
-
-async function loadChannelTasks() {
-  loading.value = true;
-  try {
-    const page = await api<{ items: Task[] }>("/api/tasks?kind=channel&page=1&pageSize=20");
-    channelTasks.value = page.items || [];
-  } catch (e) {
-    message.error(e instanceof Error ? e.message : "加载失败");
-  } finally {
-    loading.value = false;
-  }
-}
-
-async function reloadTab() {
-  if (tab.value === "message") await loadMessageItems();
-  else if (tab.value === "saved") await loadSavedTasks();
-  else await loadChannelTasks();
 }
 
 async function createMessageTask() {
@@ -409,49 +366,12 @@ const savedColumns = computed<DataTableColumns<Task>>(() => [
   },
 ]);
 
-async function createChannelTask(source: "chat_batch" | "chat_continue") {
-  if (!channelChatId.value) {
-    message.warning("请选择频道");
-    return;
+async function reloadTab() {
+  if (tab.value === "saved") {
+    await loadSavedTasks();
+  } else {
+    await loadMessageItems();
   }
-  submitting.value = true;
-  try {
-    await api("/api/tasks", {
-      method: "POST",
-      body: JSON.stringify({
-        source,
-        chatId: channelChatId.value,
-        fromMessageId: fromMsgId.value || 0,
-        count: batchCount.value,
-      }),
-    });
-    message.success("频道任务已入队");
-    await loadChannelTasks();
-  } catch (e) {
-    message.error(e instanceof Error ? e.message : "创建失败");
-  } finally {
-    submitting.value = false;
-  }
-}
-
-async function pause(id: number) {
-  await api(`/api/tasks/${id}/pause`, { method: "POST", body: "{}" });
-  await reloadTab();
-}
-
-async function resume(id: number) {
-  await api(`/api/tasks/${id}/resume`, { method: "POST", body: "{}" });
-  await reloadTab();
-}
-
-async function cancel(id: number) {
-  await api(`/api/tasks/${id}/cancel`, { method: "POST", body: "{}" });
-  await reloadTab();
-}
-
-async function retryFailed(id: number) {
-  await api(`/api/tasks/${id}/retry-failed`, { method: "POST", body: "{}" });
-  await reloadTab();
 }
 
 async function pauseAll() {
@@ -472,16 +392,6 @@ async function startAll() {
   } catch (e) {
     message.error(e instanceof Error ? e.message : "启动失败");
   }
-}
-
-async function remove(id: number) {
-  await api(`/api/tasks/${id}`, { method: "DELETE" });
-  await reloadTab();
-}
-
-function countsLine(c?: ItemCounts) {
-  if (!c) return "";
-  return `待${c.pending} · 下${c.downloading} · 完${c.done} · 跳${c.skipped} · 败${c.failed}`;
 }
 
 function applyEvent(raw: string) {
@@ -513,21 +423,7 @@ function applyEvent(raw: string) {
       if (ev.itemCounts) saved.itemCounts = ev.itemCounts;
       return;
     }
-    const t = channelTasks.value.find((x) => x.id === ev.taskId);
-    if (t) {
-      if (ev.done != null) {
-        t.progressDone = ev.done;
-        t.doneFiles = ev.done;
-      }
-      if (ev.total != null) {
-        t.progressTotal = ev.total;
-        t.totalFiles = ev.total;
-      }
-      if (ev.status) t.status = ev.status;
-      if (ev.itemCounts) t.itemCounts = ev.itemCounts;
-    } else {
-      void reloadTab();
-    }
+    void reloadTab();
   } catch {
     /* ignore */
   }
@@ -537,14 +433,17 @@ watch(tab, () => void reloadTab());
 
 function applyRoutePrefill() {
   const q = route.query;
-  if (q.tab === "channel" || q.tab === "saved" || q.tab === "message") {
+  if (q.tab === "channel") {
+    void router.replace({ name: "channels" });
+    return;
+  }
+  if (q.tab === "saved" || q.tab === "message") {
     tab.value = q.tab;
   }
   if (q.chatId != null && String(q.chatId) !== "") {
     const id = Number(q.chatId);
     if (Number.isFinite(id)) {
-      channelChatId.value = id;
-      tab.value = "channel";
+      void router.replace({ name: "channel-detail", params: { chatId: String(id) } });
     }
   }
 }
@@ -558,7 +457,6 @@ watch(
 
 onMounted(() => {
   applyRoutePrefill();
-  void loadChannels();
   void reloadTab();
   void (async () => {
     try {
@@ -575,13 +473,6 @@ onUnmounted(() => {
   es?.close();
   if (pollTimer != null) window.clearInterval(pollTimer);
 });
-
-const channelOptions = computed(() =>
-  channels.value.map((c) => ({
-    label: c.title || String(c.chatId),
-    value: c.chatId,
-  })),
-);
 </script>
 
 <template>
@@ -659,9 +550,21 @@ const channelOptions = computed(() =>
     <template v-else-if="tab === 'saved'">
       <div class="list-meta">
         <span class="section-title">同步记录</span>
-        <n-button size="small" type="primary" secondary :loading="submitting" @click="createSavedTask">
-          开始同步
-        </n-button>
+        <div class="meta-actions">
+          <n-button
+            size="small"
+            type="primary"
+            secondary
+            :loading="clearing"
+            :disabled="savedCompletedCount <= 0"
+            @click="clearCompletedSaved"
+          >
+            清除完成
+          </n-button>
+          <n-button size="small" type="primary" secondary :loading="submitting" @click="createSavedTask">
+            开始同步
+          </n-button>
+        </div>
       </div>
       <div class="table-wrap message-table">
         <n-empty v-if="!savedTasks.length && !loading" description="暂无同步记录" />
@@ -674,42 +577,6 @@ const channelOptions = computed(() =>
           size="small"
           :row-key="(r: Task) => r.id"
         />
-      </div>
-    </template>
-
-    <template v-else>
-      <div class="channel-form">
-        <n-select v-model:value="channelChatId" :options="channelOptions" placeholder="选择频道" filterable />
-        <n-input-number v-model:value="fromMsgId" placeholder="起始 message id" :min="1" clearable />
-        <n-input-number v-model:value="batchCount" placeholder="数量" :min="1" :max="5000" />
-        <n-button type="primary" :loading="submitting" @click="createChannelTask('chat_batch')">按 ID 批量</n-button>
-        <n-button secondary :loading="submitting" @click="createChannelTask('chat_continue')">继续未下载</n-button>
-      </div>
-      <div class="table-wrap">
-        <n-empty v-if="!channelTasks.length && !loading" description="暂无频道任务" />
-        <div v-for="t in channelTasks" :key="t.id" class="task-card">
-          <div class="task-head">
-            <div class="task-title">#{{ t.id }} {{ t.title }}</div>
-            <n-tag size="small" :type="statusColor(t.status)" :bordered="false">
-              {{ statusLabel[t.status] || t.status }}
-            </n-tag>
-          </div>
-          <n-progress
-            type="line"
-            :percentage="pct(t.progressDone || t.doneFiles, t.progressTotal || t.totalFiles, t.status)"
-            indicator-placement="inside"
-            :processing="t.status === 'running'"
-          />
-          <div class="task-meta">{{ countsLine(t.itemCounts) }}</div>
-          <div v-if="t.error" class="err">{{ t.error }}</div>
-          <div class="task-actions">
-            <n-button v-if="t.status === 'running' || t.status === 'queued'" size="tiny" @click="pause(t.id)">暂停</n-button>
-            <n-button v-if="t.status === 'paused'" size="tiny" type="primary" @click="resume(t.id)">开始</n-button>
-            <n-button v-if="t.status !== 'cancelled' && t.status !== 'done'" size="tiny" @click="cancel(t.id)">取消</n-button>
-            <n-button size="tiny" @click="retryFailed(t.id)">重试失败</n-button>
-            <n-button size="tiny" quaternary @click="remove(t.id)">删除</n-button>
-          </div>
-        </div>
       </div>
     </template>
   </div>
@@ -777,6 +644,12 @@ h2 {
   font-size: 13px;
   color: rgba(255, 255, 255, 0.55);
 }
+.meta-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
 .section-title {
   font-size: 14px;
   font-weight: 600;
@@ -790,52 +663,6 @@ h2 {
 }
 .message-table :deep(.n-data-table-base-table) {
   height: 100%;
-}
-.channel-form {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  align-items: center;
-  flex-shrink: 0;
-}
-.item-row,
-.task-card {
-  padding: 12px 14px;
-  margin-bottom: 8px;
-  border-radius: 10px;
-  background: #18181c;
-  border: 1px solid rgba(255, 255, 255, 0.06);
-}
-.item-head,
-.task-head {
-  display: flex;
-  justify-content: space-between;
-  gap: 8px;
-  align-items: center;
-}
-.task-title {
-  font-weight: 600;
-}
-.task-meta {
-  margin-top: 8px;
-  font-size: 12px;
-  color: rgba(255, 255, 255, 0.5);
-}
-.task-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-top: 10px;
-}
-.err {
-  color: #f9a8d4;
-  font-size: 12px;
-  margin-top: 6px;
-}
-:deep(.kind-tag) {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
 }
 .pager {
   flex-shrink: 0;

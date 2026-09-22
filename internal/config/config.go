@@ -42,16 +42,18 @@ type Config struct {
 func Default() *Config {
 	return &Config{
 		Bind:        "0.0.0.0:3030",
-		DownloadDir: "/tdload/downloads",
-		WebDir:      "/app/web",
-		DBPath:      "/tdload/config/tdload.db",
-		SessionDir:  "/tdload/config/session",
+		DownloadDir: "./downloads",
+		WebDir:      "./web/dist",
+		DBPath:      "./config/tdload.db",
+		SessionDir:  "./config/session",
 		Threads:     8,
 		Concurrency: 4,
 		SkipSame:    true,
 		GroupAlbum:  true,
+		Takeout:     true,
+		NoImage:     false,
 		WatchIntervalMinutes: 30,
-		Template:    "{{ .DialogID }}_{{ .MessageID }}_{{ .FileName }}",
+		Template:    "{{DialogID }}-{{MessageID }}-{{FileName }}",
 	}
 }
 

@@ -5,6 +5,7 @@ import {
   NButton,
   NDataTable,
   NEmpty,
+  NProgress,
   NSpin,
   NTag,
   useMessage,
@@ -39,11 +40,22 @@ const kindMeta: Record<
   },
 };
 
-function createTask(row: ChannelRow) {
-  void router.push({
-    name: "tasks",
-    query: { tab: "channel", chatId: String(row.chatId) },
-  });
+const statusMeta: Record<string, { label: string; type: "default" | "success" | "info" | "warning" | "error" }> = {
+  idle: { label: "可继续", type: "info" },
+  running: { label: "下载中", type: "success" },
+  caught_up: { label: "已追平", type: "default" },
+  has_failed: { label: "有失败", type: "warning" },
+};
+
+function openDetail(row: ChannelRow) {
+  void router.push({ name: "channel-detail", params: { chatId: String(row.chatId) } });
+}
+
+function coveragePct(r: ChannelRow) {
+  const l = r.lastMessageId || 0;
+  const c = r.scanCursor ?? r.lastDownloadedMessageId ?? 0;
+  if (l <= 0) return 0;
+  return Math.min(100, Math.round((c / l) * 100));
 }
 
 const columns: DataTableColumns<ChannelRow> = [
@@ -54,16 +66,20 @@ const columns: DataTableColumns<ChannelRow> = [
     render: (r) => {
       const name = r.title || String(r.chatId);
       const uname = r.username ? `@${r.username}` : "";
-      return h("div", { class: "name-cell" }, [
-        h("div", { class: "name-title" }, name),
-        uname ? h("div", { class: "name-sub" }, uname) : null,
-      ]);
+      return h(
+        "button",
+        { class: "name-btn", type: "button", onClick: () => openDetail(r) },
+        [
+          h("div", { class: "name-title" }, name),
+          uname ? h("div", { class: "name-sub" }, uname) : null,
+        ],
+      );
     },
   },
   {
     title: "类型",
     key: "kind",
-    width: 100,
+    width: 90,
     render: (r) => {
       const meta = kindMeta[r.kind] || {
         label: r.kind || "未知",
@@ -73,27 +89,53 @@ const columns: DataTableColumns<ChannelRow> = [
     },
   },
   {
-    title: "最新消息",
-    key: "lastMessageId",
-    width: 110,
-    render: (r) => (r.lastMessageId > 0 ? String(r.lastMessageId) : "—"),
+    title: "覆盖",
+    key: "coverage",
+    width: 160,
+    render: (r) => {
+      const c = r.scanCursor ?? r.lastDownloadedMessageId ?? 0;
+      const l = r.lastMessageId || 0;
+      return h("div", { class: "cov" }, [
+        h(NProgress, {
+          type: "line",
+          percentage: coveragePct(r),
+          showIndicator: false,
+          style: "width:100%",
+        }),
+        h("div", { class: "cov-text" }, l > 0 ? `#${c} / #${l}` : `水位 #${c}`),
+      ]);
+    },
   },
   {
     title: "已下载",
     key: "downloadedCount",
-    width: 96,
+    width: 88,
     render: (r) => String(r.downloadedCount ?? 0),
+  },
+  {
+    title: "状态",
+    key: "status",
+    width: 90,
+    render: (r) => {
+      const meta = statusMeta[r.status || "idle"] || statusMeta.idle;
+      return h(NTag, { size: "small", bordered: false, type: meta.type }, { default: () => meta.label });
+    },
   },
   {
     title: "操作",
     key: "actions",
-    width: 110,
+    width: 90,
     align: "right",
     render: (r) =>
       h(
         NButton,
-        { size: "small", type: "primary", secondary: true, onClick: () => createTask(r) },
-        { default: () => "新增任务" },
+        {
+          size: "small",
+          type: "primary",
+          secondary: true,
+          onClick: () => openDetail(r),
+        },
+        { default: () => "下载" },
       ),
   },
 ];
@@ -121,7 +163,7 @@ onMounted(() => void load());
     <header class="head">
       <div>
         <h2>频道</h2>
-        <p>已加入的频道与群组。请先在 Telegram 页点击「同步对话」。</p>
+        <p>按频道分批补齐多媒体。点「下载」进入详情查看进度并继续下载。</p>
       </div>
       <n-button secondary :loading="loading" @click="load">刷新</n-button>
     </header>
@@ -162,8 +204,15 @@ onMounted(() => void load());
   font-size: 13px;
   color: rgba(255, 255, 255, 0.55);
 }
-:deep(.name-cell) {
+:deep(.name-btn) {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  text-align: left;
+  cursor: pointer;
   min-width: 0;
+  color: inherit;
 }
 :deep(.name-title) {
   font-size: 13px;
@@ -173,5 +222,14 @@ onMounted(() => void load());
   margin-top: 2px;
   font-size: 12px;
   color: rgba(255, 255, 255, 0.4);
+}
+:deep(.cov) {
+  width: 140px;
+}
+:deep(.cov-text) {
+  margin-top: 2px;
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.45);
+  font-variant-numeric: tabular-nums;
 }
 </style>

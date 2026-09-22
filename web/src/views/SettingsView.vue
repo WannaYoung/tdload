@@ -8,7 +8,6 @@ import {
   NInput,
   NInputNumber,
   NSwitch,
-  NTag,
   useMessage,
 } from "naive-ui";
 import {
@@ -31,13 +30,10 @@ const loading = ref(false);
 const saving = ref(false);
 const about = reactive({
   version: "",
-  license: "",
   sourceUrl: "",
-  notice: "",
 });
 
 const form = reactive({
-  downloadDir: "",
   proxy: "",
   template: "",
   threads: 8,
@@ -45,16 +41,9 @@ const form = reactive({
   skipSame: true,
   groupAlbum: true,
   rewriteExt: false,
-  takeout: false,
+  takeout: true,
   noImage: false,
   watchIntervalMinutes: 30,
-  appId: 0,
-  appHashSet: false,
-  usingDesktopPreset: false,
-  bind: "",
-  dbPath: "",
-  sessionDir: "",
-  webDir: "",
 });
 
 async function load() {
@@ -62,10 +51,9 @@ async function load() {
   try {
     const [s, aboutData] = await Promise.all([
       api<Settings>("/api/settings"),
-      api<{ version: string; license: string; sourceUrl: string; notice: string }>("/api/about").catch(() => null),
+      api<{ version: string; sourceUrl: string }>("/api/about").catch(() => null),
     ]);
     Object.assign(form, {
-      downloadDir: s.downloadDir,
       proxy: s.proxy,
       template: s.template,
       threads: s.threads,
@@ -76,19 +64,10 @@ async function load() {
       takeout: s.takeout,
       noImage: !!s.noImage,
       watchIntervalMinutes: s.watchIntervalMinutes || 30,
-      appId: s.appId,
-      appHashSet: s.appHashSet,
-      usingDesktopPreset: !!s.usingDesktopPreset,
-      bind: s.bind,
-      dbPath: s.dbPath,
-      sessionDir: s.sessionDir,
-      webDir: s.webDir,
     });
     if (aboutData) {
       about.version = aboutData.version || "";
-      about.license = aboutData.license || "";
       about.sourceUrl = aboutData.sourceUrl || "";
-      about.notice = aboutData.notice || "";
     }
     applyNoImageSetting(form.noImage);
   } catch (e) {
@@ -104,7 +83,6 @@ async function save() {
     const s = await api<Settings>("/api/settings", {
       method: "PUT",
       body: JSON.stringify({
-        downloadDir: form.downloadDir,
         proxy: form.proxy,
         template: form.template,
         threads: form.threads,
@@ -148,7 +126,6 @@ onMounted(() => void load());
       <n-form-item label="无图模式">
         <n-switch v-model:value="form.noImage" />
       </n-form-item>
-      <p class="hint" :class="{ mobile: isMobile }">开启后资源库封面与预览图显示占位图，不请求原图。</p>
     </section>
 
     <section class="settings-section sec-download">
@@ -158,37 +135,33 @@ onMounted(() => void load());
           下载任务
         </h3>
       </div>
-      <n-form-item label="下载目录">
-        <n-input v-model:value="form.downloadDir" />
-      </n-form-item>
       <n-form-item label="文件名模板">
         <n-input v-model:value="form.template" />
       </n-form-item>
       <p class="hint" :class="{ mobile: isMobile }">
-        路径：下载目录 / 频道ID_名称 / 模板。字段：DialogID、MessageID、FileName 等。
+        文件路径：downloads / {频道ID}-{频道名称} / {模板名}.{扩展名}
       </p>
-      <n-form-item label="单任务线程 (-t)">
-        <n-input-number v-model:value="form.threads" :min="1" :max="32" class="num" />
+      <n-form-item label="并发数">
+        <div class="pair-inputs" :class="{ mobile: isMobile }">
+          <n-input-number v-model:value="form.concurrency" :min="1" :max="16" class="num" />
+          <span class="pair-side-label">线程数</span>
+          <n-input-number v-model:value="form.threads" :min="1" :max="32" class="num" />
+        </div>
       </n-form-item>
-      <n-form-item label="并发任务 (-l)">
-        <n-input-number v-model:value="form.concurrency" :min="1" :max="16" class="num" />
-      </n-form-item>
-      <p class="hint" :class="{ mobile: isMobile }">当前 Worker 受 Telegram session 限制，实际并行为 1；数值会写回配置供后续启用。</p>
       <n-form-item label="跳过已下载">
-        <n-switch v-model:value="form.skipSame" />
-      </n-form-item>
-      <n-form-item label="相册整组">
-        <n-switch v-model:value="form.groupAlbum" />
+        <div class="switch-pair">
+          <n-switch v-model:value="form.skipSame" />
+          <span class="pair-side-label">相册整组</span>
+          <n-switch v-model:value="form.groupAlbum" />
+        </div>
       </n-form-item>
       <n-form-item label="纠正扩展名">
-        <n-switch v-model:value="form.rewriteExt" />
+        <div class="switch-pair">
+          <n-switch v-model:value="form.rewriteExt" />
+          <span class="pair-side-label">Takeout</span>
+          <n-switch v-model:value="form.takeout" />
+        </div>
       </n-form-item>
-      <n-form-item label="Takeout">
-        <n-switch v-model:value="form.takeout" />
-      </n-form-item>
-      <p class="hint" :class="{ mobile: isMobile }">
-        Takeout 启用后大批量下载更不易触发 FloodWait；纠正扩展名按 MIME 写回文件后缀。
-      </p>
     </section>
 
     <section class="settings-section sec-watch">
@@ -236,20 +209,8 @@ onMounted(() => void load());
           系统信息
         </h3>
       </div>
-      <n-form-item label="监听地址">
-        <n-input :value="form.bind" readonly />
-      </n-form-item>
-      <n-form-item label="数据库">
-        <n-input :value="form.dbPath" readonly />
-      </n-form-item>
-      <n-form-item label="Session 目录">
-        <n-input :value="form.sessionDir" readonly />
-      </n-form-item>
       <n-form-item label="版本">
-        <div class="info-row">
-          <span>{{ about.version || "—" }}</span>
-          <n-tag size="small" type="info">{{ about.license || "AGPL-3.0" }}</n-tag>
-        </div>
+        <span>{{ about.version || "—" }}</span>
       </n-form-item>
       <n-form-item label="源码">
         <a v-if="about.sourceUrl" class="source-link" :href="about.sourceUrl" target="_blank" rel="noopener">
@@ -257,18 +218,6 @@ onMounted(() => void load());
         </a>
         <span v-else>—</span>
       </n-form-item>
-      <n-form-item label="App ID">
-        <div class="info-row">
-          <span>{{ form.appId || "未设置" }}</span>
-          <n-tag v-if="form.usingDesktopPreset" size="small" type="info">Desktop 公开凭证</n-tag>
-          <n-tag v-else-if="form.appHashSet" size="small" type="success">Hash 已设置</n-tag>
-          <n-tag v-else size="small" type="warning">Hash 未设置</n-tag>
-        </div>
-      </n-form-item>
-      <p class="hint" :class="{ mobile: isMobile }">
-        API 凭证请在 Telegram 页或环境变量 TG_APP_ID / TG_APP_HASH 修改。
-        {{ about.notice || "" }}
-      </p>
     </section>
 
     <div class="form-actions">
@@ -325,6 +274,32 @@ onMounted(() => void load());
   width: 100%;
   max-width: 180px;
 }
+.pair-inputs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 16px;
+  width: 100%;
+}
+.pair-inputs .num {
+  flex: 1 1 120px;
+  max-width: 180px;
+}
+.pair-side-label {
+  flex: 0 0 auto;
+  color: rgba(255, 255, 255, 0.82);
+  font-size: 14px;
+  white-space: nowrap;
+}
+.pair-inputs.mobile .num {
+  max-width: none;
+}
+.switch-pair {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 60px;
+}
 .hint {
   margin: -8px 0 12px 140px;
   color: rgba(255, 255, 255, 0.45);
@@ -333,13 +308,6 @@ onMounted(() => void load());
 }
 .hint.mobile {
   margin-left: 0;
-}
-.info-row {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-  font-size: 14px;
 }
 .source-link {
   color: #f472b6;

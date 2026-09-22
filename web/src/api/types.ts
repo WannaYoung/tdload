@@ -86,6 +86,14 @@ export type TGSummary = {
   savedSyncedAt?: string;
 };
 
+export type ItemCounts = {
+  pending: number;
+  downloading: number;
+  done: number;
+  skipped: number;
+  failed: number;
+};
+
 export type ChannelRow = {
   chatId: number;
   title: string;
@@ -95,15 +103,40 @@ export type ChannelRow = {
   downloadedCount: number;
   lastMessageId: number;
   lastDownloadedMessageId: number;
+  scanCursor?: number;
+  caughtUp?: boolean;
+  status?: string;
   syncedAt: string;
 };
 
-export type ItemCounts = {
-  pending: number;
-  downloading: number;
-  done: number;
-  skipped: number;
-  failed: number;
+export type ChannelDownloadTask = {
+  id: number;
+  title: string;
+  status: string;
+  progressDone?: number;
+  progressTotal?: number;
+  doneFiles?: number;
+  totalFiles?: number;
+  itemCounts?: ItemCounts;
+  error?: string;
+  createdAt?: string;
+};
+
+export type ChannelDownloadInfo = {
+  chatId: number;
+  title: string;
+  username: string;
+  kind: string;
+  downloadedCount: number;
+  lastMessageId: number;
+  scanCursor: number;
+  caughtUp: boolean;
+  failedCount: number;
+  status: string;
+  syncedAt?: string;
+  activeTask?: ChannelDownloadTask | null;
+  recentBatches?: ChannelDownloadTask[];
+  defaultBatchSize?: number;
 };
 
 export type TaskItemRow = {

@@ -107,8 +107,7 @@ func (s *Server) handleWatchCandidates(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleCreateWatch(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		ChatID int64          `json:"chatId"`
-		Filter map[string]any `json:"filter"`
+		ChatID int64 `json:"chatId"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.ChatID == 0 {
 		writeErr(w, http.StatusBadRequest, "请选择频道")
@@ -159,13 +158,7 @@ func (s *Server) handleCreateWatch(w http.ResponseWriter, r *http.Request) {
 
 	interval := time.Duration(s.Cfg.ClampWatchInterval()) * time.Minute
 	nextRun := time.Now().UTC().Add(interval).Format(time.RFC3339)
-	filterJSON := "{}"
-	if body.Filter != nil {
-		if b, err := json.Marshal(body.Filter); err == nil {
-			filterJSON = string(b)
-		}
-	}
-	row, err := s.DB.InsertWatchedChat(r.Context(), db.DefaultTGAccountID, body.ChatID, title, latest, nextRun, filterJSON)
+	row, err := s.DB.InsertWatchedChat(r.Context(), db.DefaultTGAccountID, body.ChatID, title, latest, nextRun, "{}")
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
@@ -177,11 +170,8 @@ func (s *Server) handleCreateWatch(w http.ResponseWriter, r *http.Request) {
 		"chatTitle":       title,
 		"isFavorites":     isFav,
 		"lastMessageId":   latest,
-		"cursorMessageId": row.LastMessageID,
 		"downloadedCount": downloaded,
-		"lastRunAt":       row.LastRunAt,
-		"nextRunAt":       row.NextRunAt,
-		"createdAt":       row.CreatedAt,
+		"nextRunAt":       nextRun,
 	})
 }
 

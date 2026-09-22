@@ -17,10 +17,10 @@ concurrency: 4
 skip_same: true
 group_album: true
 rewrite_ext: false
-takeout: false
+takeout: true
 no_image: false      # 界面无图模式：资源库预览用占位图
 watch_interval_minutes: 30  # 监听轮询间隔（分钟，10–300）
-template: "{{ .DialogID }}_{{ .MessageID }}_{{ .FileName }}"
+template: "{{DialogID }}-{{MessageID }}-{{FileName }}"
 
 proxy: ""
 jwt_secret: ""

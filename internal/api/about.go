@@ -8,7 +8,7 @@ import (
 
 func (s *Server) handleAbout(w http.ResponseWriter, r *http.Request) {
 	writeOK(w, map[string]any{
-		"name":      "tdload",
+		"name":      "TDLoad",
 		"version":   version.Version,
 		"license":   version.License,
 		"sourceUrl": version.SourceURL,

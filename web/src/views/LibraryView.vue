@@ -118,11 +118,16 @@ async function load() {
 async function syncDisk() {
   syncing.value = true;
   try {
-    const data = await api<{ kept: number; pruned: number; imported: number }>("/api/library/sync", {
-      method: "POST",
-      body: "{}",
-    });
-    message.success(`同步完成：保留 ${data.kept}，清理 ${data.pruned}，导入 ${data.imported}`);
+    const data = await api<{ kept: number; pruned: number; imported: number; cursorsUpdated: number }>(
+      "/api/library/sync",
+      {
+        method: "POST",
+        body: "{}",
+      },
+    );
+    message.success(
+      `同步完成：保留 ${data.kept}，清理 ${data.pruned}，导入 ${data.imported}，水位更新 ${data.cursorsUpdated ?? 0}`,
+    );
     await loadFilters();
     await load();
   } catch (e) {

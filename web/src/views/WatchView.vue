@@ -4,7 +4,6 @@ import {
   NButton,
   NDataTable,
   NEmpty,
-  NInput,
   NSelect,
   NSpin,
   useMessage,
@@ -22,9 +21,6 @@ const rows = ref<WatchRow[]>([]);
 const candidates = ref<WatchCandidate[]>([]);
 const selectedChatId = ref<number | null>(null);
 const intervalMinutes = ref(30);
-const includeExt = ref("");
-const excludeExt = ref("");
-const minSizeMb = ref("");
 
 let timer: number | null = null;
 
@@ -132,32 +128,12 @@ async function addWatch() {
   }
   adding.value = true;
   try {
-    const filter: Record<string, unknown> = {};
-    const inc = includeExt.value
-      .split(/[,，\s]+/)
-      .map((s) => s.trim().replace(/^\./, ""))
-      .filter(Boolean);
-    const exc = excludeExt.value
-      .split(/[,，\s]+/)
-      .map((s) => s.trim().replace(/^\./, ""))
-      .filter(Boolean);
-    if (inc.length) filter.include_ext = inc;
-    if (exc.length) filter.exclude_ext = exc;
-    const mb = Number(minSizeMb.value);
-    if (Number.isFinite(mb) && mb > 0) filter.min_size = Math.round(mb * 1024 * 1024);
-
     await api("/api/watch", {
       method: "POST",
-      body: JSON.stringify({
-        chatId: selectedChatId.value,
-        ...(Object.keys(filter).length ? { filter } : {}),
-      }),
+      body: JSON.stringify({ chatId: selectedChatId.value }),
     });
     message.success("已加入监听");
     selectedChatId.value = null;
-    includeExt.value = "";
-    excludeExt.value = "";
-    minSizeMb.value = "";
     await load();
   } catch (e) {
     message.error(e instanceof Error ? e.message : "添加失败");
@@ -210,11 +186,6 @@ onUnmounted(() => {
         添加监听
       </n-button>
     </div>
-    <div class="filter-row">
-      <n-input v-model:value="includeExt" clearable placeholder="扩展名白名单，如 jpg,mp4（可空）" />
-      <n-input v-model:value="excludeExt" clearable placeholder="扩展名黑名单（可空）" />
-      <n-input v-model:value="minSizeMb" clearable placeholder="最小大小 MB（可空）" />
-    </div>
 
     <div class="table-wrap">
       <n-spin :show="loading" class="spin-fill">
@@ -249,12 +220,6 @@ h2 {
   align-items: center;
   gap: 10px;
   flex-wrap: nowrap;
-}
-.filter-row {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 10px;
-  margin-top: 10px;
 }
 .chat-select {
   flex: 1 1 auto;

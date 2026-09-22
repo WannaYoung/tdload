@@ -276,9 +276,21 @@ func (d *DB) DeleteTask(ctx context.Context, id int64) error {
 	return err
 }
 
-func (d *DB) ClearCompletedTasks(ctx context.Context) error {
-	_, err := d.SQL.ExecContext(ctx, `DELETE FROM tasks WHERE status IN ('done','cancelled')`)
-	return err
+func (d *DB) ClearCompletedTasks(ctx context.Context, kind string) (int64, error) {
+	sources := sourcesForKind(kind)
+	if len(sources) == 0 {
+		res, err := d.SQL.ExecContext(ctx, `DELETE FROM tasks WHERE status IN ('done','cancelled','failed')`)
+		if err != nil {
+			return 0, err
+		}
+		return res.RowsAffected()
+	}
+	q, args := inClause(`DELETE FROM tasks WHERE status IN ('done','cancelled','failed') AND source IN (`, sources)
+	res, err := d.SQL.ExecContext(ctx, q, args...)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
 }
 
 func inClause(prefix string, sources []string) (string, []any) {

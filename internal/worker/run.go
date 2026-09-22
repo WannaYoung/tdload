@@ -129,7 +129,7 @@ func (w *Worker) runChatTask(ctx context.Context, task *db.Task) error {
 	switch task.Source {
 	case "chat_continue":
 		mode = "continue"
-		afterID, _ = w.DB.MaxDownloadedMessageID(ctx, int64(chatID))
+		afterID, _ = w.DB.GetScanCursor(ctx, db.DefaultTGAccountID, int64(chatID))
 	case "chat_batch", "chat_range", "watch":
 		mode = "batch"
 		if task.Source == "watch" && count <= 0 && toID >= fromID && fromID > 0 {
@@ -138,11 +138,9 @@ func (w *Worker) runChatTask(ctx context.Context, task *db.Task) error {
 	}
 
 	dlOpt := w.channelDownloadOpts(task.ID)
-	if rawFilter, ok := optMap["filter"].(map[string]any); ok {
-		b, _ := json.Marshal(rawFilter)
-		dlOpt.Filter = tg.ParseMediaFilter(string(b))
-	} else if s, ok := optMap["filter"].(string); ok {
-		dlOpt.Filter = tg.ParseMediaFilter(s)
+	maxMedia := int(count)
+	if maxMedia <= 0 {
+		maxMedia = 500
 	}
 	params := tg.ChatDownloadParams{
 		ChatID:         int64(chatID),
@@ -153,15 +151,21 @@ func (w *Worker) runChatTask(ctx context.Context, task *db.Task) error {
 		Mode:           mode,
 		AfterMessageID: afterID,
 		LastMessageID:  lastMsgID,
+		MaxMedia:       maxMedia,
 		GroupAlbum:     w.Cfg.GroupAlbum,
 	}
-	err := w.TG.DownloadChat(ctx, dlOpt, params)
+	scanEnd, err := w.TG.DownloadChat(ctx, dlOpt, params)
 	if err != nil {
 		return err
 	}
-	// 推进水位：取本次任务中最大 message id
-	if maxID, e := w.DB.MaxTaskItemMessageID(ctx, task.ID); e == nil && maxID > 0 {
-		_ = w.DB.UpsertChatDownloadState(ctx, db.DefaultTGAccountID, int64(chatID), maxID)
+	// 仅历史补齐（频道下载）推进 chat_download_state；监听只推进 watched_chats，避免把扫描水位抬过未补完的历史。
+	// 文件去重仍共用 media_index，两边互相 skip_same。
+	if task.Source != "watch" {
+		if scanEnd > 0 {
+			_ = w.DB.UpsertChatDownloadState(ctx, db.DefaultTGAccountID, int64(chatID), scanEnd)
+		} else if maxID, e := w.DB.MaxTaskItemMessageID(ctx, task.ID); e == nil && maxID > 0 {
+			_ = w.DB.UpsertChatDownloadState(ctx, db.DefaultTGAccountID, int64(chatID), maxID)
+		}
 	}
 	if task.Source == "watch" && watchID > 0 {
 		cursor := int(toID)
@@ -212,12 +216,6 @@ func (w *Worker) runWatchSavedTask(ctx context.Context, task *db.Task) error {
 		favID = tg.FavoritesChatID(selfID)
 	}
 	opt := w.downloadOpts(task.ID, tg.FavoritesFolderName)
-	if rawFilter, ok := optMap["filter"].(map[string]any); ok {
-		b, _ := json.Marshal(rawFilter)
-		opt.Filter = tg.ParseMediaFilter(string(b))
-	} else if s, ok := optMap["filter"].(string); ok {
-		opt.Filter = tg.ParseMediaFilter(s)
-	}
 	baseOnItem := opt.OnItem
 	opt.OnItem = func(cID int64, messageID int, status, fileName, localPath, errMsg string) {
 		if baseOnItem != nil {

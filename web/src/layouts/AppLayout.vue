@@ -215,7 +215,7 @@ function goHome() {
     >
       <button class="brand" type="button" @click="goHome">
         <n-icon size="22" :component="PaperPlaneOutline" />
-        <span>tdload</span>
+        <span>TDLoad</span>
       </button>
       <n-menu
         :value="activeKey"
@@ -230,7 +230,7 @@ function goHome() {
       <header class="header" :class="{ mobile: isMobile }">
         <button class="header-left brand-btn" type="button" @click="goHome">
           <n-icon v-if="isMobile" size="20" :component="PaperPlaneOutline" />
-          <span v-if="isMobile" class="brand-text">tdload</span>
+          <span v-if="isMobile" class="brand-text">TDLoad</span>
           <span v-else class="muted">Telegram 批量下载控制台</span>
         </button>
         <div v-if="isMobile" class="header-right">

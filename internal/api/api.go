@@ -51,6 +51,8 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/tg/summary", s.withAuth(s.handleTGSummary))
 	mux.HandleFunc("GET /api/channels", s.withAuth(s.handleListChannels))
 	mux.HandleFunc("GET /api/channels/{chatId}", s.withAuth(s.handleGetChannel))
+	mux.HandleFunc("GET /api/channels/{chatId}/download", s.withAuth(s.handleChannelDownload))
+	mux.HandleFunc("POST /api/channels/{chatId}/continue", s.withAuth(s.handleChannelContinue))
 	mux.HandleFunc("GET /api/tasks", s.withAuth(s.handleListTasks))
 	mux.HandleFunc("POST /api/tasks", s.withAuth(s.handleCreateTasks))
 	mux.HandleFunc("GET /api/tasks/{id}", s.withAuth(s.handleGetTask))
@@ -242,9 +244,7 @@ func settingsView(c *config.Config) map[string]any {
 }
 
 func applySettings(c *config.Config, body map[string]any) {
-	if v, ok := body["downloadDir"].(string); ok && v != "" {
-		c.DownloadDir = v
-	}
+	// downloadDir / dbPath / sessionDir 等路径仅通过配置文件或环境固定，不在设置页修改
 	if v, ok := body["proxy"].(string); ok {
 		c.Proxy = v
 	}

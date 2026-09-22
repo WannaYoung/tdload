@@ -18,6 +18,11 @@ const router = createRouter({
         { path: "telegram", name: "telegram", component: () => import("../views/TelegramView.vue") },
         { path: "channels", name: "channels", component: () => import("../views/ChannelsView.vue") },
         {
+          path: "channels/:chatId",
+          name: "channel-detail",
+          component: () => import("../views/ChannelDetailView.vue"),
+        },
+        {
           path: "tasks",
           name: "tasks",
           component: () => import("../views/TasksView.vue"),

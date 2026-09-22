@@ -17,9 +17,10 @@ import (
 )
 
 type SyncResult struct {
-	Kept     int `json:"kept"`
-	Pruned   int `json:"pruned"`
-	Imported int `json:"imported"`
+	Kept            int `json:"kept"`
+	Pruned          int `json:"pruned"`
+	Imported        int `json:"imported"`
+	CursorsUpdated  int `json:"cursorsUpdated"`
 }
 
 var fileNamePattern = regexp.MustCompile(`^(-?\d+)_(\d+)_(.+)$`)
@@ -112,7 +113,11 @@ func SyncDisk(ctx context.Context, database *db.DB, downloadDir string, favorite
 	if err != nil {
 		return nil, err
 	}
-	return &SyncResult{Kept: kept, Pruned: pruned, Imported: imported}, nil
+	cursors, err := database.RebuildScanCursorsFromMedia(ctx, db.DefaultTGAccountID, favoritesChatID)
+	if err != nil {
+		return nil, err
+	}
+	return &SyncResult{Kept: kept, Pruned: pruned, Imported: imported, CursorsUpdated: cursors}, nil
 }
 
 func parseIndexedPath(rel string, favoritesChatID int64) (chatID int64, messageID int, fileName string, ok bool) {

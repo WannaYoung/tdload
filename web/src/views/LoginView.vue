@@ -34,7 +34,7 @@ async function submit() {
     <div class="glow glow-b" />
     <n-card class="card" :bordered="false">
       <header class="brand">
-        <h1>tdload</h1>
+        <h1>TDLoad</h1>
         <p>Telegram 批量下载控制台</p>
       </header>
       <n-form :model="form" @submit.prevent="submit">

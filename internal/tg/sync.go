@@ -224,16 +224,6 @@ func (m *Manager) DownloadSaved(ctx context.Context, opt DownloadOptions, favori
 					opt.OnItem(favoritesChatID, mid, "downloading", file.Name, "", "")
 				}
 				size := mediaSize(msg)
-				if !opt.Filter.Match(file.Name, size, msg.Message) {
-					if opt.OnItem != nil {
-						opt.OnItem(favoritesChatID, mid, "skipped", file.Name, "", "过滤规则跳过")
-					}
-					done++
-					if opt.OnProgress != nil {
-						opt.OnProgress(done, total, file.Name+" (过滤)")
-					}
-					continue
-				}
 				if opt.SkipSame && opt.Exists != nil && size > 0 {
 					if exists, path, err := opt.Exists(favoritesChatID, mid, size); err == nil && exists {
 						if opt.OnItem != nil {

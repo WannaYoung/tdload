@@ -16,16 +16,16 @@
 
 ### 1.1 目标
 
-控制台以 **Telegram 账号为中心**：先同步对话与收藏，再在「频道」浏览统计，在「任务」按三种方式入队下载；全程 **自动跳过已下载**（`media_index` + 磁盘存在性），进度经 SSE 推送。
+控制台以 **Telegram 账号为中心**：先同步对话与收藏，再在「频道」浏览覆盖进度并继续下载，在「任务」处理消息链接与收藏同步；全程 **自动跳过已下载**（`media_index` + 磁盘存在性），进度经 SSE 推送。
 
 | 能力 | 说明 |
 |------|------|
 | 鉴权 | 控制台 JWT + Telegram session |
 | **Telegram 页** | 登录 / 退出；**刷新**频道·群组·收藏缓存；展示 **频道（对话）数**、**收藏数** |
-| **频道页** | 已加入的频道与群组：类型、消息总数、已下载数 |
-| **任务页（3 Tab）** | 消息下载 / 收藏下载 / 频道下载（见 §7.2） |
-| **资源库** | 已下载索引、搜索、扫盘同步（非侧栏「频道」） |
-| **监听（二期）** | 频道 / 群增量，规则自动入队 |
+| **频道页** | 已加入的频道与群组：覆盖进度、已下载数；详情页「继续下载」工作台 |
+| **任务页（2 Tab）** | 消息下载 / 收藏同步（见 §7.2） |
+| **资源库** | 已下载索引、筛选、预览、扫盘同步 |
+| **监听** | 频道 / 群 / 收藏增量自动入队（仅水位扫描，无扩展名/大小过滤） |
 | 部署 | 单镜像 Docker，`linux/amd64` / `linux/arm64`；本机前后端分离调试 |
 
 **落盘目录（相对 `download_dir`）：**
@@ -37,8 +37,8 @@
 
 | 阶段 | 内容 |
 |------|------|
-| **一期** | 对话/收藏同步 + 频道列表 + 任务三 Tab 入队 + 队列/SSE + 资源库 |
-| **二期** | 监听规则 + 自动入队（复用同一任务模型与去重） |
+| **一期** | 对话/收藏同步 + 频道工作台 + 任务两 Tab + 队列/SSE + 资源库 |
+| **二期** | 监听增量自动入队（复用同一任务模型与去重） |
 
 ### 1.3 一期非目标
 
@@ -83,7 +83,7 @@ flowchart LR
 
 1. **API**：REST + SSE + 静态前端托管  
 2. **Worker**：消费 `queued` 任务，调用 tdl 下载，写盘与更新 DB  
-3. **Watcher（二期）**：监听对话增量，过滤后入队  
+3. **Watcher（二期）**：监听对话增量，命中后入队  
 
 关机时 drain 进行中任务（有超时上限），未完成任务下次启动重新入队。
 
@@ -97,10 +97,10 @@ flowchart LR
 
 ### 3.3 数据流（二期监听）
 
-1. 用户选择对话并配置过滤规则，写入 `watched_chats`  
-2. Watcher 维护水位 `last_message_id`  
-3. 新消息命中规则 → 自动创建 task 入队  
-4. 后续与一期 Worker 相同
+1. 用户选择对话写入 `watched_chats`（加入时记录当前最新 message id 为水位，不立刻下载）
+2. Watcher 按间隔扫描，取 `(水位, 最新]` 增量
+3. 有新媒体 → 自动创建 `watch` / `watch_saved` 任务入队
+4. 后续与一期 Worker 相同（`skip_same` 去重）
 
 ---
 
@@ -288,7 +288,7 @@ SQLite。迁移用编号 SQL 或轻量迁移库（如 `golang-migrate` / 自研 
 | chat_title | TEXT | |
 | enabled | INTEGER | 0/1 |
 | last_message_id | INTEGER | 水位 |
-| filter_json | TEXT | 扩展名白/黑名单、最小大小、关键词等 |
+| filter_json | TEXT | 预留列，固定 `{}`（不再使用扩展名/大小等过滤） |
 | created_at / updated_at | TEXT | |
 
 ### 6.8 `tg_dialogs`（一期 · 缓存）
@@ -324,7 +324,7 @@ Telegram 页点「刷新」后写入；频道页只读此表（必要时后台�
 
 ### 6.10 `chat_download_state`（一期 · 可选）
 
-按对话记录批量下载水位，便于频道 Tab「继续未下载」与频道页展示。
+按对话记录批量下载扫描水位，便于频道详情「继续下载」与列表覆盖进度。
 
 | 列 | 类型 | 说明 |
 |----|------|------|
@@ -343,17 +343,18 @@ Telegram 页点「刷新」后写入；频道页只读此表（必要时后台�
 
 ### 7.1 侧栏导航（目标态）
 
-**顺序固定：** 仪表盘 · Telegram · **频道** · 任务 · 监听 · **资源库** · 设置
+**当前侧栏：** 仪表盘 · Telegram · **频道** · 任务 · **资源库** · 监听 · 设置
 
-| 路由名 | 页面 | 一期 |
+| 路由名 | 页面 | 说明 |
 |--------|------|------|
 | `dashboard` | 仪表盘 | 队列 / 磁盘 / TG 摘要 |
 | `telegram` | Telegram | 登录 + **同步** + 计数 |
-| `channels` | 频道 | 对话列表 + 统计 |
-| `tasks` | 任务 | 三 Tab + 队列列表 |
-| `watch` | 监听 | 二期规则（一期占位） |
-| `library` | 资源库 | 索引浏览（UI 文案用「资源库」，路由可仍为 `library`） |
-| `settings` | 设置 | 下载参数、目录、proxy 等 |
+| `channels` | 频道 | 列表覆盖进度；详情继续下载 |
+| `channel-detail` | 频道详情 | 覆盖进度 +「继续下载」工作台 |
+| `tasks` | 任务 | 消息下载 / 收藏同步 两 Tab |
+| `library` | 资源库 | 索引浏览、筛选、预览、扫盘 |
+| `watch` | 监听 | 增量自动入队 |
+| `settings` | 设置 | 下载参数、目录、proxy、监听间隔等 |
 
 ### 7.2 各页能力（一期详细）
 
@@ -365,48 +366,35 @@ Telegram 页点「刷新」后写入；频道页只读此表（必要时后台�
 
 **频道**
 
-- 表格：标题、`@username`、**类型**（频道 / 超级群 / 群等）、**消息总数**、**已下载数**
-- 可选：跳转任务页「频道下载」并预选该对话
-- 数据来自 `tg_dialogs` + `media_index` 聚合；未同步时引导回 Telegram 页刷新
+- 列表：标题、`@username`、**类型**、**覆盖进度**（扫描水位 / 最新 message id）、已下载数、状态；右侧「下载」进入详情
+- 详情工作台：覆盖进度条、每批条数、「继续下载」（`POST /api/channels/{chatId}/continue`，从水位向前扫一批）；进行中批次可暂停 / 继续 / 取消 / 重试失败；历史批次折叠展示
+- 同频道同时只跑一批；数据来自 `tg_dialogs` + `chat_download_state` + `media_index`；未同步时引导回 Telegram 页刷新
+- 监听与频道下载水位分离：监听只推进 `watched_chats`，不抬高频道扫描水位；文件去重仍共用 `media_index`
 
 **任务 — 公共**
 
-- 三个 Tab **各自独立任务列表**（按 `source` 分组），共用 SSE + 轮询；所有入队 **默认跳过已下载**
-- 频道类任务在 Worker 仍写 `task_items`，但 **前端不展示单条消息行**（见下）
+- 两个 Tab **各自独立列表**，共用 SSE + 轮询；所有入队 **默认跳过已下载**
+- 顶部：全部暂停 / 全部开始 / 刷新
+- 旧链接 `?tab=channel` / `?chatId=` 重定向到频道列表或详情
 
 **任务 — Tab 1：消息下载**
 
-- 入队：多行粘贴 `t.me/...` → `source=url`（**已实现**）
-- **列表：每条消息一行**，展示单条进度（字节 / 文件、状态标签、失败原因）
-- **分页：`pageSize=50`**（`GET /api/tasks?kind=message`）
-- 操作：暂停、开始（恢复）、取消、删除；**重试失败** = 仅对该任务内 `status=failed` 的 `task_items` 重新入队
+- 入队：多行粘贴 `t.me/...` → `source=url`
+- **列表：每条消息一行**（频道、消息 ID、文件名、类型、状态）；分页 `pageSize=50`
+- 操作：删除单项、「清除已完成」；工具栏暂停/开始作用于队列
 
-**任务 — Tab 2：收藏下载**
+**任务 — Tab 2：收藏同步**
 
-- 入队：「下载全部收藏」等 → `source=saved_all`；落盘 `{download_dir}/我的收藏/`
-- 顶部摘要：**收藏数**、**已下载数**（缓存 + `media_index`）
-- **列表：每条收藏消息一行**，与 Tab1 相同粒度的 **单条进度**
-- **分页：`pageSize=50`**（`GET /api/tasks?kind=saved`）
-- 操作：同 Tab1（暂停 / 开始 / 取消 / 重试失败项）
-
-**任务 — Tab 3：频道下载**
-
-- 入队区：切换频道、继续未下、起始 message id + 数量等（`chat_continue` / `chat_batch`，见 §8.4）
-- **列表：每个频道（每个频道下载任务）一行**，**不展示单条消息进度**
-- 每行展示：
-  - **任务总进度条**（`done` / `total`，以「含媒体的消息/文件」为 total，跳过计为 done 或单独 `skipped` 计数）
-  - **分状态数量**：如 等待 / 下载中 / 已完成 / 已跳过 / 失败（由 `task_items` 聚合，API 字段见 §8.4）
-  - 频道名、`chat_id`、任务状态（queued / running / paused / …）
-- **分页：`pageSize=20`**（`GET /api/tasks?kind=channel`）
-- 操作：**暂停**、**开始**（从 paused 恢复）、**取消**（`cancelled`，停止 Worker 且保留 items 状态）、**重试失败**（仅重试该任务下 failed items，不重跑已成功/已跳过）
-- SSE：频道 Tab 只订阅 **任务级** `task_progress`（聚合 done/total）；**不向 UI 推送单条 item 事件**（后端仍可写 DB，可选 `task_item_progress` 仅给 message/saved Tab）
+- 入队：「开始同步」→ `source=saved_all`；落盘 `{download_dir}/我的收藏/`
+- 列表：同步记录（收藏数 / 已同步 / 失败 / 时间）；「清除完成」删除已结束记录；单项可停止并删除
+- 分页：`GET /api/tasks?kind=saved`
 
 **资源库**
 
-- **频道筛选**：顶栏下拉；选项第一项固定 **「我的收藏」**（对应目录 `我的收藏/` 或收藏专用 `chat_id`），其余为 `{id}_{名称}` 频道/群（来自 `tg_dialogs` + 索引中出现过的对话）
-- **媒体类型筛选**：全部 / **图片** / **视频**（按 `media_index.mime` 或扩展名规则：`image/*`、`video/*`）
-- **预览**：列表卡片或表格行内 **缩略图**；图片 lightbox；视频 **内联或弹层播放器**（经 `/api/library/{id}/file` 或 preview + ticket，支持 Range）
-- 关键词搜索、分页、本地路径、删索引（可选删文件）、扫盘补索引（M6 可加强）
+- **频道筛选**：顶栏下拉；选项第一项固定 **「我的收藏」**，其余为频道/群
+- **媒体类型筛选**：全部 / **图片** / **视频**
+- **预览**：图片 lightbox；视频播放（`/api/library/{id}/file`，支持 Range）
+- 分页、本地路径、删索引（可选删文件）、扫盘补索引
 
 **监听**
 
@@ -414,24 +402,25 @@ Telegram 页点「刷新」后写入；频道页只读此表（必要时后台�
 - 监听页：下拉添加（已监听不可再选；「我的收藏」置顶可选）；列表「我的收藏」置顶
 - 表头：频道、已下载、最新消息、上次运行、下次运行；删除移除
 - 加入时记录当前最新 message id 为水位，**不立刻下载**；到期后下载 `[水位, 最新]`（含端点），`skip_same` 去重；成功后推进水位
+- **无**扩展名黑白名单、最小大小、关键词等过滤；增量媒体一律入队
 - 任务 source：`watch` / `watch_saved`
 
-### 7.3 当前实现与目标差距（2025-09 同步）
+### 7.3 当前实现与目标差距
 
 | 目标 | 现状 |
 |------|------|
-| 侧栏含「频道」「资源库」 | ✅ 已对齐 |
-| Telegram 刷新 + 计数 | ✅ `/api/tg/sync`、`/api/tg/summary` + Telegram 页 |
-| 频道列表与统计 | ✅ `tg_dialogs` + `/api/channels` + 频道页 |
-| 任务三 Tab + 分 Tab 列表/分页 | ✅ 前端三 Tab；message/saved 走 `/api/tasks/items` 50 条；channel 任务 20 条 |
-| 频道任务：总进度 + 状态计数 + 重试失败 | ✅ Worker + SSE `task_progress` + itemCounts |
-| 收藏下载 + `我的收藏/` | ✅ `saved_all` Worker + 目录 |
-| 频道批量 / 续下 / 起止 id | ✅ `chat_batch` / `chat_continue` |
+| 侧栏含「频道」「资源库」 | ✅ |
+| Telegram 刷新 + 计数 | ✅ |
+| 频道列表与继续下载工作台 | ✅ `ChannelsView` + `ChannelDetailView` |
+| 任务两 Tab（消息 / 收藏） | ✅；频道下载已迁出任务页 |
+| 收藏同步 + `我的收藏/` | ✅ |
 | 跳过已下载 | ✅ |
-| 资源库：频道下拉、图/视频预览筛选 | ✅ 基础版 + lightbox；**扫盘同步 / 删索引** |
-| 监听 | ✅ API + Watcher + 设置间隔 + 监听页 + filter / `watch_hit` |
-| Takeout / rewrite_ext | ✅ 设置开关已接到下载路径 |
-| 关于（AGPL） | ✅ 设置页 + `GET /api/about` |
+| 资源库筛选 / 预览 / 扫盘 | ✅ |
+| 监听增量入队 | ✅（无扩展名/大小过滤） |
+| Takeout / rewrite_ext | ✅ |
+| 关于（AGPL） | ✅ |
+| Docker 多架构 | ⏳ M4 |
+| JSON 导出入队、二维码登录、任务日志 API、资源库搜索框等 | 可选后续 |
 
 ### 7.4 前端目录建议
 
@@ -443,7 +432,7 @@ web/
 │   ├── api/                # http.ts + types
 │   ├── stores/             # auth、dialogs（可选）
 │   ├── router/
-│   ├── views/              # Login / Dashboard / Telegram / Channels / Tasks / Library / Settings / Watch
+│   ├── views/              # Login / Dashboard / Telegram / Channels / ChannelDetail / Tasks / Library / Settings / Watch
 │   ├── composables/        # useSSE 等
 │   └── main.ts
 ```
@@ -485,14 +474,14 @@ web/
 
 实现应对齐 tdl 登录流程（见 [tdl 登录文档](https://docs.iyear.me/tdl/guide/login/)），session 文件写入 `session_dir`。同步使用 gotd `messages.GetDialogs` / Saved Messages 历史；注意 FloodWait 与分页。
 
-### 8.3 频道（一期）
+### 8.3 频道
 
 | 方法 | 路径 | 说明 | 状态 |
 |------|------|------|------|
-| GET | `/api/channels` | 分页列表：`kind`、消息数、已下载数、可选 `lastDownloadedMessageId` | 已实现 |
-| GET | `/api/channels/{chatId}` | 单对话详情 + 下载水位 | 已实现 |
-
-（可与 `GET /api/tg/dialogs` 合并为 `/api/channels`，避免两套列表 API。）
+| GET | `/api/channels` | 分页列表：`kind`、覆盖水位、已下载数、状态 | 已实现 |
+| GET | `/api/channels/{chatId}` | 单对话详情 | 已实现 |
+| GET | `/api/channels/{chatId}/download` | 下载工作台摘要：覆盖进度、进行中任务、历史批次 | 已实现 |
+| POST | `/api/channels/{chatId}/continue` | body `{ count }`：从水位向前扫一批入队 | 已实现 |
 
 ### 8.4 任务（一期）
 
@@ -511,7 +500,7 @@ web/
 | DELETE | `/api/tasks/{id}` | 删除 | 已实现 |
 | POST | `/api/tasks/pause-all` | | 已实现 |
 | POST | `/api/tasks/start-all` | | 已实现 |
-| DELETE | `/api/tasks/completed` | 清理已完成 | 已实现 |
+| DELETE | `/api/tasks/completed` | 清理已结束任务；可选 `?kind=saved` | 已实现 |
 | GET | `/api/tasks/{id}/logs` | 日志 | 待定 |
 
 **`GET /api/tasks` 查询：**
@@ -545,16 +534,16 @@ web/
 
 message/saved 列表项可带 `itemsPreview`（当前页关联 items）或前端再调 `/items`。
 
-**`source` 与前端 Tab 对应：**
+**`source` 与产品入口对应：**
 
-| source | Tab | 说明 |
-|--------|-----|------|
-| `url` | 消息下载 | 多行 `t.me` 链接 |
-| `saved_all` | 收藏下载 | 缓存中未下载项；`out_subdir`: `我的收藏` |
-| `chat_continue` | 频道下载 | 指定 `chat_id`，扫未下载直至追上或 takeout 限制 |
-| `chat_batch` | 频道下载 | `chat_id` + `from_message_id` + `count`（含该 id 起 N 条） |
-| `json` | （扩展） | 导出 JSON |
-| `watch` | （二期） | 监听自动入队 |
+| source | 入口 | 说明 |
+|--------|------|------|
+| `url` | 任务 · 消息下载 | 多行 `t.me` 链接 |
+| `saved_all` | 任务 · 收藏同步 | 缓存中未下载项；`out_subdir`: `我的收藏` |
+| `chat_continue` | 频道详情 · 继续下载 | 指定 `chat_id` + `count`，从水位向前扫 |
+| `chat_batch` | （API 仍支持） | `chat_id` + `from_message_id` + `count` |
+| `json` | （可选后续） | 导出 JSON |
+| `watch` / `watch_saved` | 监听自动入队 | 增量区间 |
 
 **创建 body 示例：**
 
@@ -621,14 +610,14 @@ message/saved 列表项可带 `itemsPreview`（当前页关联 items）或前端
 |------|------|------|
 | GET | `/api/watch` | 监听列表（「我的收藏」置顶） |
 | GET | `/api/watch/candidates` | 可添加的频道（已监听排除；收藏置顶） |
-| POST | `/api/watch` | body `{ chatId }`；加入时写入水位=当前最新，不下载 |
+| POST | `/api/watch` | body `{ chatId }`；加入时写入水位=当前最新，不下载；不接受过滤规则 |
 | DELETE | `/api/watch/{id}` | 移除监听 |
 
 设置项：`watchIntervalMinutes`（10–300，默认 30）。
 
 ### 8.7 SSE 事件形状
 
-**任务级（频道 Tab 必用；message/saved 也可用总进度）：**
+**任务级（频道详情 / 收藏同步等任务进度；message 也可用）：**
 
 ```json
 {
@@ -761,22 +750,12 @@ for {
 
 ## 11. Watcher 设计（二期）
 
-1. 对每个 `enabled` 的 `watched_chats` 定时或用 gotd updates 拉增量  
-2. `message_id > last_message_id` 的新媒体消息进入过滤器  
-3. 过滤器：`filter_json` 示例：
-
-```json
-{
-  "include_ext": ["jpg", "png", "mp4"],
-  "exclude_ext": [],
-  "min_size": 0,
-  "keyword_any": []
-}
-```
-
-4. 命中则创建 `source=watch` 的 task（可合并短时间窗口内多条为一批）  
-5. 成功入队后推进水位；失败不推进或按策略重试  
-6. SSE 推送 `watch_hit` 便于仪表盘展示
+1. 对每个 `enabled` 的 `watched_chats` 按 `watch_interval_minutes` 扫描增量  
+2. 区间为 `(last_message_id, 最新]`（含端点）；收藏走 `saved_messages_cache` 区间  
+3. 有候选消息则创建 `source=watch` / `watch_saved` 任务入队（可合并为一批）  
+4. **不做**扩展名 / 大小 / 关键词过滤；去重仅靠下载路径 `skip_same` + `media_index`  
+5. 入队后更新调度时间；下载成功后由 Worker 推进监听水位（与频道 `chat_download_state` 分离）  
+6. SSE 推送 `watch_hit` 便于仪表盘展示  
 
 注意：监听是「发现 + 入队」，实际下载仍走 Worker，避免两套下载逻辑。
 
@@ -939,13 +918,13 @@ services:
 | `internal/static` | SPA 静态托管 | 已完成 |
 | `internal/tg` | Telegram 登录与 client | **M1 验证码登录已完成** |
 | `internal/downloader` + `worker` + `progress` | tdl 下载与 SSE | **M2 + M3.6 频道批量已完成** |
-| `internal/watcher` | 频道监听 | **M5 已完成**（filter / watch_hit 已接） |
+| `internal/watcher` | 频道监听 | **M5 已完成**（水位扫描 + `watch_hit`；无媒体过滤规则） |
 | `web` 壳 | 深色 + 粉色高亮、宽窄屏布局、@vicons/ionicons5 | 已完成壳 |
 | Docker | 多架构镜像 | 待 M4 |
 
-**前端导航（目标）：** 仪表盘 · Telegram · **频道** · 任务 · 监听 · **资源库** · 设置（见 §7.1）
+**前端导航：** 仪表盘 · Telegram · 频道 · 任务 · 资源库 · 监听 · 设置
 
-**当前侧栏：** 仪表盘 · Telegram · 频道 · 任务 · 资源库 · 监听 · 设置
+**当前侧栏：** 同上
 
 ### M0 — 仓库骨架
 
@@ -979,7 +958,7 @@ services:
 - [x] 登录、仪表盘、TG、任务（链接入队）、资料库/监听占位、设置页
 - [x] 任务真实列表 + SSE 进度条 + 轮询兜底
 
-### M3.5 — 产品对齐（频道 · 三 Tab · 同步）（已完成）
+### M3.5 — 产品对齐（频道 · 任务 · 同步）（已完成）
 
 依赖 M1 + M2 Worker；按 §7.2 验收。
 
@@ -987,7 +966,7 @@ services:
 
 - [x] 迁移：`tg_dialogs`、`saved_messages_cache`、`chat_download_state`（§6.8–6.10）
 - [x] `POST /api/tg/sync`、`GET /api/tg/summary`
-- [x] `GET /api/channels`（含已下载数、最后已下 message id）
+- [x] `GET /api/channels`（含已下载数、扫描水位）
 - [x] Worker：`source=saved_all`（输出 `我的收藏/`）
 - [x] Worker：`chat_batch` / `chat_continue`（频道历史扫描 + itemCounts 实时聚合）
 - [x] 收藏 `media_index` 使用 **self user id** 作为 `chat_id`（`tg.FavoritesChatID`）
@@ -998,15 +977,15 @@ services:
 
 - [x] 侧栏：「频道」+「资源库」
 - [x] Telegram 页：同步 + 计数
-- [x] `ChannelsView.vue`
-- [x] `TasksView.vue`：三 Tab（频道批量已接通）
+- [x] `ChannelsView.vue` + `ChannelDetailView.vue`（继续下载工作台）
+- [x] `TasksView.vue`：消息 / 收藏两 Tab（频道下载已迁出）
 - [x] `LibraryView.vue`：筛选 + 图/视频预览
 
 ### M3.6 — 频道批量 Worker（已完成）
 
 - [x] `internal/tg`：按 `chat_id` 拉历史、按范围/续下生成 jobs
 - [x] Worker 更新 `task_items` 并仅推送 **task_progress + itemCounts**
-- [x] 频道 Tab 去掉「开发中」提示
+- [x] 频道工作台：覆盖进度 +「继续下载」；监听不抬高频道扫描水位
 ### M4 — Docker
 
 - [ ] 多阶段 Dockerfile
@@ -1019,7 +998,7 @@ services:
 - [x] `watched_chats` API（列表 / 候选 / 添加 / 删除）
 - [x] Watcher 定时扫描 + 水位（含端点区间）+ 入队 `watch` / `watch_saved`
 - [x] 设置页监听间隔；监听页（收藏置顶）
-- [x] 扩展 `filter_json`（include/exclude_ext、min_size、keyword）与 SSE `watch_hit`
+- [x] SSE `watch_hit`；不做扩展名/大小/关键词过滤（`filter_json` 列保留为 `{}`）
 
 ### M6 — 硬化
 
@@ -1074,12 +1053,9 @@ services:
 
 1. ~~M1 Telegram 登录~~ ✅（QR 可选）
 2. ~~M2 链接下载闭环~~ ✅
-3. ~~**M3.5 产品对齐**~~ ✅
-4. ~~**M3.6 频道批量 Worker**~~ ✅
-5. ~~**M5** 监听自动入队~~ ✅（filter / `watch_hit` 已接）
-6. ~~**M6** 扫盘 / takeout / 关于页~~ ✅（结构化日志/metrics 可选）
-7. **M4** Docker 多架构（按需）
+3. ~~**M3.5 / M3.6** 频道工作台 + 任务两 Tab~~ ✅
+4. ~~**M5** 监听自动入队~~ ✅（无媒体过滤规则）
+5. ~~**M6** 扫盘 / takeout / 关于页~~ ✅（结构化日志/metrics 可选）
+6. **M4** Docker 多架构（按需）
 
-可选后续：二维码登录、JSON 导出入队、资源库缩略图、关键词搜索强化。
-
-实现监听时可对照 xtools 的 Browse 交互（分类切换、批量勾选、入队），但数据源为 Telegram 对话而非站点分类。
+可选后续：二维码登录、JSON 导出入队、资源库缩略图 / 关键词搜索 UI、任务日志 API。

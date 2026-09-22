@@ -1,7 +1,6 @@
 package tg
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"log/slog"
@@ -10,7 +9,6 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-	"text/template"
 	"time"
 
 	"github.com/go-faster/errors"
@@ -33,22 +31,17 @@ type DownloadOptions struct {
 	GroupAlbum bool
 	SkipSame   bool
 	RewriteExt bool
-	Filter     MediaFilter
 	OnProgress DownloadProgress
 	Exists     func(chatID int64, messageID int, size int64) (bool, string, error)
 	OnFile     func(chatID int64, messageID int, fileName string, size int64, path, mime string) error
 	OnItem     func(chatID int64, messageID int, status, fileName, localPath, errMsg string)
 }
 
-type fileTemplate struct {
-	DialogID     int64
-	MessageID    int
-	MessageDate  int64
-	FileName     string
-	FileCaption  string
-	FileSize     string
-	DownloadDate int64
-}
+// DefaultFileTemplate 默认文件名模板（占位符 {{Field}}，无 Go 模板点号）。
+const DefaultFileTemplate = "{{DialogID }}-{{MessageID }}-{{FileName }}"
+
+// fileTplField 匹配 {{DialogID}} / {{ DialogID }} / 旧式 {{ .DialogID }}。
+var fileTplField = regexp.MustCompile(`\{\{\s*\.?([A-Za-z_][A-Za-z0-9_]*)\s*\}\}`)
 
 // Run runs fn with an authorized Telegram client.
 func (m *Manager) Run(ctx context.Context, fn func(ctx context.Context, client *telegram.Client) error) error {
@@ -106,15 +99,7 @@ func (m *Manager) DownloadURLs(ctx context.Context, opt DownloadOptions) error {
 		opt.Template = m.Cfg.Template
 	}
 	if opt.Template == "" {
-		opt.Template = "{{ .DialogID }}_{{ .MessageID }}_{{ .FileName }}"
-	}
-	tpl, err := template.New("dl").Funcs(template.FuncMap{
-		"filenamify": func(s string, _ ...int) string { return safeFileName(s) },
-		"upper":      strings.ToUpper,
-		"lower":      strings.ToLower,
-	}).Parse(opt.Template)
-	if err != nil {
-		return errors.Wrap(err, "解析文件名模板")
+		opt.Template = DefaultFileTemplate
 	}
 	outRoot := opt.OutDir
 	if opt.OutSubdir != "" {
@@ -198,21 +183,6 @@ func (m *Manager) DownloadURLs(ctx context.Context, opt DownloadOptions) error {
 			}
 
 			size := mediaSize(j.msg)
-			caption := ""
-			if j.msg != nil {
-				caption = j.msg.Message
-			}
-			if !opt.Filter.Match(file.Name, size, caption) {
-				skipped++
-				done++
-				if opt.OnItem != nil {
-					opt.OnItem(j.chatID, j.msgID, "skipped", file.Name, "", "过滤规则跳过")
-				}
-				if opt.OnProgress != nil {
-					opt.OnProgress(done, total, file.Name+" (过滤)")
-				}
-				continue
-			}
 			if opt.SkipSame && opt.Exists != nil && size > 0 {
 				if exists, path, err := opt.Exists(j.chatID, j.msgID, size); err == nil && exists {
 					if opt.OnItem != nil {
@@ -234,10 +204,7 @@ func (m *Manager) DownloadURLs(ctx context.Context, opt DownloadOptions) error {
 			if opt.RewriteExt {
 				rawName = rewriteExtByMIME(rawName, file.MIMEType)
 			}
-			name, err := renderFileName(tpl, j.chatID, j.msgID, j.msg, rawName, size)
-			if err != nil {
-				return err
-			}
+			name := renderFileName(opt.Template, j.chatID, j.msgID, j.msg, rawName, size)
 			chatDir := filepath.Join(outRoot, chatFolderName(j.chatID, j.chatName))
 			if opt.OutSubdir != "" {
 				chatDir = outRoot
@@ -254,7 +221,7 @@ func (m *Manager) DownloadURLs(ctx context.Context, opt DownloadOptions) error {
 			slog.Info("downloading", "file", name, "path", path, "size", size, "threads", threads)
 			fileCtx, cancel := context.WithTimeout(ctx, 30*time.Minute)
 			builder := dl.Download(api, file.Location).WithThreads(threads)
-			_, err = builder.ToPath(fileCtx, path)
+			_, err := builder.ToPath(fileCtx, path)
 			cancel()
 			if err != nil {
 				_ = os.Remove(path)
@@ -298,14 +265,14 @@ func chatFolderName(chatID int64, chatName string) string {
 	if name == "" || name == "." || name == ".." {
 		return id
 	}
-	folder := id + "_" + name
+	folder := id + "-" + name
 	if len(folder) > 120 {
 		folder = folder[:120]
 	}
 	return folder
 }
 
-func renderFileName(tpl *template.Template, chatID int64, msgID int, msg *tg.Message, rawName string, size int64) (string, error) {
+func renderFileName(tpl string, chatID int64, msgID int, msg *tg.Message, rawName string, size int64) string {
 	base := safeFileName(rawName)
 	if base == "" {
 		base = fmt.Sprintf("%d_%d", chatID, msgID)
@@ -316,20 +283,26 @@ func renderFileName(tpl *template.Template, chatID int64, msgID int, msg *tg.Mes
 		caption = msg.Message
 		msgDate = int64(msg.Date)
 	}
-	var buf bytes.Buffer
-	err := tpl.Execute(&buf, &fileTemplate{
-		DialogID:     chatID,
-		MessageID:    msgID,
-		MessageDate:  msgDate,
-		FileName:     base,
-		FileCaption:  caption,
-		FileSize:     strconv.FormatInt(size, 10),
-		DownloadDate: time.Now().Unix(),
-	})
-	if err != nil {
-		return "", errors.Wrap(err, "执行文件名模板")
+	vals := map[string]string{
+		"DialogID":     strconv.FormatInt(chatID, 10),
+		"MessageID":    strconv.Itoa(msgID),
+		"MessageDate":  strconv.FormatInt(msgDate, 10),
+		"FileName":     base,
+		"FileCaption":  caption,
+		"FileSize":     strconv.FormatInt(size, 10),
+		"DownloadDate": strconv.FormatInt(time.Now().Unix(), 10),
 	}
-	name := strings.TrimSpace(buf.String())
+	name := fileTplField.ReplaceAllStringFunc(tpl, func(m string) string {
+		sub := fileTplField.FindStringSubmatch(m)
+		if len(sub) < 2 {
+			return ""
+		}
+		if v, ok := vals[sub[1]]; ok {
+			return v
+		}
+		return ""
+	})
+	name = strings.TrimSpace(name)
 	name = strings.ReplaceAll(name, "\\", "/")
 	// 模板只允许文件名；目录统一用频道 ID
 	name = filepath.Base(name)
@@ -337,7 +310,7 @@ func renderFileName(tpl *template.Template, chatID int64, msgID int, msg *tg.Mes
 	if name == "" || name == "." || name == ".." {
 		name = base
 	}
-	return name, nil
+	return name
 }
 
 func mediaSize(msg *tg.Message) int64 {

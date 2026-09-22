@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"strings"
 	"time"
 
 	"tdload/internal/config"
@@ -152,9 +151,6 @@ func (w *Watcher) runOne(ctx context.Context, item db.WatchedChat, favID int64, 
 		optMap := map[string]any{
 			"watchId": item.ID, "chatId": item.ChatID, "fromMessageId": from, "toMessageId": to, "messageIds": ids,
 		}
-		if f := filterObject(item.FilterJSON); f != nil {
-			optMap["filter"] = f
-		}
 		opt, _ := json.Marshal(optMap)
 		title := fmt.Sprintf("监听 · 我的收藏 · #%d–#%d", from, to)
 		task, err := w.DB.CreateTask(ctx, "watch_saved", title, string(opt), len(ids))
@@ -177,9 +173,6 @@ func (w *Watcher) runOne(ctx context.Context, item db.WatchedChat, favID int64, 
 	}
 	optMap := map[string]any{
 		"watchId": item.ID, "chatId": item.ChatID, "fromMessageId": from, "toMessageId": to, "count": count,
-	}
-	if f := filterObject(item.FilterJSON); f != nil {
-		optMap["filter"] = f
 	}
 	opt, _ := json.Marshal(optMap)
 	title := item.ChatTitle
@@ -206,16 +199,4 @@ func (w *Watcher) publishHit(item db.WatchedChat, taskID int64, from, to, count 
 		Done: from, Total: to, Title: item.ChatTitle, Status: "queued",
 		Error: fmt.Sprintf("%d", count),
 	})
-}
-
-func filterObject(raw string) any {
-	raw = strings.TrimSpace(raw)
-	if raw == "" || raw == "{}" {
-		return nil
-	}
-	var v any
-	if err := json.Unmarshal([]byte(raw), &v); err != nil {
-		return nil
-	}
-	return v
 }

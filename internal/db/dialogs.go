@@ -171,6 +171,84 @@ func (d *DB) MaxDownloadedMessageID(ctx context.Context, chatID int64) (int, err
 	return int(n.Int64), nil
 }
 
+// GetScanCursor 返回频道历史扫描水位：优先 chat_download_state，否则回退 media_index 最大 message id。
+func (d *DB) GetScanCursor(ctx context.Context, accountID, chatID int64) (int, error) {
+	var n sql.NullInt64
+	err := d.SQL.QueryRowContext(ctx, `
+SELECT last_downloaded_message_id FROM chat_download_state
+WHERE tg_account_id=? AND chat_id=?`, accountID, chatID).Scan(&n)
+	if err == nil && n.Valid && n.Int64 > 0 {
+		return int(n.Int64), nil
+	}
+	if err != nil && err != sql.ErrNoRows {
+		return 0, err
+	}
+	return d.MaxDownloadedMessageID(ctx, chatID)
+}
+
+func (d *DB) HasActiveChannelTask(ctx context.Context, chatID int64) (bool, int64, error) {
+	var id int64
+	err := d.SQL.QueryRowContext(ctx, `
+SELECT id FROM tasks
+WHERE status IN ('queued','running','paused')
+  AND source IN ('chat_continue','chat_batch','chat_range')
+  AND json_extract(options_json, '$.chatId') = ?
+ORDER BY id DESC LIMIT 1`, chatID).Scan(&id)
+	if err == sql.ErrNoRows {
+		return false, 0, nil
+	}
+	if err != nil {
+		return false, 0, err
+	}
+	return true, id, nil
+}
+
+func (d *DB) GetActiveChannelTask(ctx context.Context, chatID int64) (*Task, error) {
+	ok, id, err := d.HasActiveChannelTask(ctx, chatID)
+	if err != nil || !ok {
+		return nil, err
+	}
+	return d.GetTask(ctx, id)
+}
+
+func (d *DB) ListChannelTasksForChat(ctx context.Context, chatID int64, limit int) ([]*Task, error) {
+	if limit <= 0 {
+		limit = 10
+	}
+	rows, err := d.SQL.QueryContext(ctx, `
+SELECT id, source, title, status, tg_account_id, options_json,
+       total_bytes, done_bytes, total_files, done_files, speed_bps, error,
+       created_at, started_at, finished_at
+FROM tasks
+WHERE source IN ('chat_continue','chat_batch','chat_range')
+  AND json_extract(options_json, '$.chatId') = ?
+ORDER BY id DESC LIMIT ?`, chatID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*Task
+	for rows.Next() {
+		t, err := scanTask(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, t)
+	}
+	return out, rows.Err()
+}
+
+func (d *DB) CountFailedItemsForChatActive(ctx context.Context, chatID int64) (int, error) {
+	var n int
+	err := d.SQL.QueryRowContext(ctx, `
+SELECT COUNT(1) FROM task_items ti
+JOIN tasks t ON t.id = ti.task_id
+WHERE ti.status='failed'
+  AND t.source IN ('chat_continue','chat_batch','chat_range')
+  AND json_extract(t.options_json, '$.chatId') = ?`, chatID).Scan(&n)
+	return n, err
+}
+
 func (d *DB) MaxTaskItemMessageID(ctx context.Context, taskID int64) (int, error) {
 	var n sql.NullInt64
 	err := d.SQL.QueryRowContext(ctx, `SELECT MAX(message_id) FROM task_items WHERE task_id=?`, taskID).Scan(&n)
@@ -194,6 +272,88 @@ ON CONFLICT(tg_account_id, chat_id) DO UPDATE SET
   updated_at=excluded.updated_at`,
 		accountID, chatID, lastMessageID, now)
 	return err
+}
+
+// SetScanCursor 强制写入扫描水位（允许下调，供扫盘同步对齐磁盘）。
+func (d *DB) SetScanCursor(ctx context.Context, accountID, chatID int64, lastMessageID int) error {
+	now := time.Now().UTC().Format(time.RFC3339)
+	if lastMessageID < 0 {
+		lastMessageID = 0
+	}
+	_, err := d.SQL.ExecContext(ctx, `
+INSERT INTO chat_download_state (tg_account_id, chat_id, last_downloaded_message_id, updated_at)
+VALUES (?, ?, ?, ?)
+ON CONFLICT(tg_account_id, chat_id) DO UPDATE SET
+  last_downloaded_message_id=excluded.last_downloaded_message_id,
+  updated_at=excluded.updated_at`,
+		accountID, chatID, lastMessageID, now)
+	return err
+}
+
+// RebuildScanCursorsFromMedia 按 media_index 各 chat 的最大 message_id 重建水位；无文件的频道水位归零。
+// skipChatID 一般为收藏 chat_id，不参与频道水位。
+func (d *DB) RebuildScanCursorsFromMedia(ctx context.Context, accountID, skipChatID int64) (int, error) {
+	rows, err := d.SQL.QueryContext(ctx, `
+SELECT chat_id, COALESCE(MAX(message_id), 0) FROM media_index GROUP BY chat_id`)
+	if err != nil {
+		return 0, err
+	}
+	defer rows.Close()
+	maxByChat := map[int64]int{}
+	for rows.Next() {
+		var chatID int64
+		var maxID int
+		if err := rows.Scan(&chatID, &maxID); err != nil {
+			return 0, err
+		}
+		if skipChatID > 0 && chatID == skipChatID {
+			continue
+		}
+		maxByChat[chatID] = maxID
+	}
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+
+	stateRows, err := d.SQL.QueryContext(ctx, `
+SELECT chat_id FROM chat_download_state WHERE tg_account_id=?`, accountID)
+	if err != nil {
+		return 0, err
+	}
+	defer stateRows.Close()
+	for stateRows.Next() {
+		var chatID int64
+		if err := stateRows.Scan(&chatID); err != nil {
+			return 0, err
+		}
+		if skipChatID > 0 && chatID == skipChatID {
+			continue
+		}
+		if _, ok := maxByChat[chatID]; !ok {
+			maxByChat[chatID] = 0
+		}
+	}
+	if err := stateRows.Err(); err != nil {
+		return 0, err
+	}
+
+	n := 0
+	for chatID, maxID := range maxByChat {
+		if err := d.SetScanCursor(ctx, accountID, chatID, maxID); err != nil {
+			return n, err
+		}
+		n++
+	}
+	return n, nil
+}
+
+// SyncScanCursorForChat 将单个频道水位对齐为 media_index 最大 message_id（无则 0）。
+func (d *DB) SyncScanCursorForChat(ctx context.Context, accountID, chatID int64) error {
+	maxID, err := d.MaxDownloadedMessageID(ctx, chatID)
+	if err != nil {
+		return err
+	}
+	return d.SetScanCursor(ctx, accountID, chatID, maxID)
 }
 
 func (d *DB) LibraryChatFilters(ctx context.Context, accountID int64, favoritesChatID int64) ([]struct {
