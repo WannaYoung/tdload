@@ -16,6 +16,12 @@ const router = createRouter({
       children: [
         { path: "", name: "dashboard", component: () => import("../views/dashboard/DashboardView.vue") },
         { path: "telegram", name: "telegram", component: () => import("../views/telegram/TelegramView.vue") },
+        {
+          path: "saved",
+          name: "saved",
+          component: () => import("../views/saved/SavedView.vue"),
+          meta: { embedScroll: "desktop" },
+        },
         { path: "channels", name: "channels", component: () => import("../views/channels/ChannelsView.vue") },
         {
           path: "channels/:chatId",
@@ -27,6 +33,11 @@ const router = createRouter({
           name: "tasks",
           component: () => import("../views/tasks/TasksView.vue"),
           meta: { embedScroll: "desktop" },
+          beforeEnter: (to) => {
+            if (to.query.tab === "saved") return { name: "saved" };
+            if (to.query.tab === "channel") return { name: "channels" };
+            return true;
+          },
         },
         {
           path: "library",
@@ -34,7 +45,12 @@ const router = createRouter({
           component: () => import("../views/library/LibraryView.vue"),
           meta: { embedScroll: "desktop" },
         },
-        { path: "watch", name: "watch", component: () => import("../views/watch/WatchView.vue") },
+        {
+          path: "watch",
+          name: "watch",
+          component: () => import("../views/watch/WatchView.vue"),
+          meta: { embedScroll: "desktop" },
+        },
         { path: "settings", name: "settings", component: () => import("../views/settings/SettingsView.vue") },
       ],
     },

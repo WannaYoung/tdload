@@ -53,6 +53,7 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/channels/{chatId}", s.withAuth(s.handleGetChannel))
 	mux.HandleFunc("GET /api/channels/{chatId}/download", s.withAuth(s.handleChannelDownload))
 	mux.HandleFunc("POST /api/channels/{chatId}/continue", s.withAuth(s.handleChannelContinue))
+	mux.HandleFunc("POST /api/channels/{chatId}/scan-cursor", s.withAuth(s.handleChannelScanCursor))
 	mux.HandleFunc("GET /api/tasks", s.withAuth(s.handleListTasks))
 	mux.HandleFunc("POST /api/tasks", s.withAuth(s.handleCreateTasks))
 	mux.HandleFunc("GET /api/tasks/{id}", s.withAuth(s.handleGetTask))
@@ -154,6 +155,7 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	msgActive, savedActive, channelActive, _ := s.DB.DashboardActiveByKind(r.Context())
 	tgTotal, tgActive, tgExpired, _ := s.DB.TGAccountStatus(r.Context())
 	diskUsed, diskAvail, diskTotal := diskUsage(s.Cfg.DownloadDir)
 
@@ -174,31 +176,34 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeOK(w, map[string]any{
-		"tgAccounts":       tgTotal,
-		"tgActive":         tgActive,
-		"tgExpired":        tgExpired,
-		"tasksQueued":      queued,
-		"tasksRunning":     running,
-		"tasksFailed":      failed,
-		"tasksPaused":      paused,
-		"tasksDone":        done,
-		"media":            media,
-		"downloadDir":      s.Cfg.DownloadDir,
-		"diskUsed":         diskUsed,
-		"diskAvailable":    diskAvail,
-		"diskTotal":        diskTotal,
-		"tgConfigured":     s.Cfg.AppID > 0 && s.Cfg.AppHash != "",
-		"watchEnabled":     watchCount > 0,
-		"watchCount":       watchCount,
+		"tgAccounts":           tgTotal,
+		"tgActive":             tgActive,
+		"tgExpired":            tgExpired,
+		"tasksQueued":          queued,
+		"tasksRunning":         running,
+		"tasksFailed":          failed,
+		"tasksPaused":          paused,
+		"tasksDone":            done,
+		"tasksMessageActive":   msgActive,
+		"tasksSavedActive":     savedActive,
+		"tasksChannelActive":   channelActive,
+		"media":                media,
+		"downloadDir":          s.Cfg.DownloadDir,
+		"diskUsed":             diskUsed,
+		"diskAvailable":        diskAvail,
+		"diskTotal":            diskTotal,
+		"tgConfigured":         s.Cfg.AppID > 0 && s.Cfg.AppHash != "",
+		"watchEnabled":         watchCount > 0,
+		"watchCount":           watchCount,
 		"watchIntervalMinutes": s.Cfg.ClampWatchInterval(),
-		"dialogCount":      dialogCount,
-		"savedCount":       savedCount,
-		"savedDownloaded":  savedDownloaded,
-		"dialogsSyncedAt":  dialogsAt,
-		"savedSyncedAt":    savedAt,
-		"proxyConfigured":  strings.TrimSpace(s.Cfg.Proxy) != "",
-		"threads":          s.Cfg.Threads,
-		"concurrency":      s.Cfg.Concurrency,
+		"dialogCount":          dialogCount,
+		"savedCount":           savedCount,
+		"savedDownloaded":      savedDownloaded,
+		"dialogsSyncedAt":      dialogsAt,
+		"savedSyncedAt":        savedAt,
+		"proxyConfigured":      strings.TrimSpace(s.Cfg.Proxy) != "",
+		"threads":              s.Cfg.Threads,
+		"concurrency":          s.Cfg.Concurrency,
 	})
 }
 

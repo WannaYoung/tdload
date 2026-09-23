@@ -114,6 +114,19 @@ func (s *Server) handleRetryFailedTask(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "无效 id")
 		return
 	}
+	ids, err := s.DB.ListFailedTaskItemMessageIDs(r.Context(), id)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if len(ids) == 0 {
+		writeErr(w, http.StatusBadRequest, "没有失败项可重试")
+		return
+	}
+	if err := s.DB.SetTaskRetryMessageIDs(r.Context(), id, ids); err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
 	n, err := s.DB.RetryFailedTaskItems(r.Context(), id)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
@@ -202,14 +215,7 @@ func mediaKindLabel(mime, fileName string) string {
 func taskViewEnriched(s *Server, r *http.Request, t *db.Task) map[string]any {
 	v := taskView(t)
 	switch t.Source {
-	case "chat_continue", "chat_batch", "chat_range":
-		v["kind"] = "channel"
-		if counts, err := s.DB.TaskItemCounts(r.Context(), t.ID); err == nil {
-			v["itemCounts"] = counts
-			v["progressDone"] = counts.Done + counts.Skipped
-			v["progressTotal"] = counts.Pending + counts.Downloading + counts.Done + counts.Skipped + counts.Failed
-		}
-	case "saved_all":
+	case "saved_all", "watch_saved":
 		v["kind"] = "saved"
 		if counts, err := s.DB.TaskItemCounts(r.Context(), t.ID); err == nil {
 			total := counts.Pending + counts.Downloading + counts.Done + counts.Skipped + counts.Failed
@@ -219,6 +225,13 @@ func taskViewEnriched(s *Server, r *http.Request, t *db.Task) map[string]any {
 			v["itemCounts"] = counts
 			v["progressDone"] = counts.Done + counts.Skipped
 			v["progressTotal"] = total
+		}
+	case "chat_continue", "chat_batch", "chat_range", "watch":
+		v["kind"] = "channel"
+		if counts, err := s.DB.TaskItemCounts(r.Context(), t.ID); err == nil {
+			v["itemCounts"] = counts
+			v["progressDone"] = counts.Done + counts.Skipped
+			v["progressTotal"] = counts.Pending + counts.Downloading + counts.Done + counts.Skipped + counts.Failed
 		}
 	default:
 		v["kind"] = "message"

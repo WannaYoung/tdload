@@ -10,7 +10,10 @@ import (
 	"tdload/internal/tg"
 )
 
-func (w *Worker) downloadOpts(taskID int64, outSubdir string) tg.DownloadOptions {
+func (w *Worker) downloadOpts(taskID int64, outSubdir, kind string) tg.DownloadOptions {
+	if kind == "" {
+		kind = "message"
+	}
 	return tg.DownloadOptions{
 		OutDir:     w.Cfg.DownloadDir,
 		OutSubdir:  outSubdir,
@@ -36,22 +39,22 @@ func (w *Worker) downloadOpts(taskID int64, outSubdir string) tg.DownloadOptions
 				TaskID: taskID, ChatID: chatID, MessageID: messageID,
 				FileName: fileName, Status: status, LocalPath: localPath, Error: errMsg,
 			})
-			w.publishItemProgress(taskID, chatID, messageID, status)
+			w.publishItemProgress(taskID, chatID, messageID, status, kind)
 		},
 		OnProgress: func(doneFiles, totalFiles int, fileName string) {
 			bg := context.Background()
 			_ = w.DB.UpdateTaskProgress(bg, taskID, doneFiles, totalFiles, 0, 0, 0)
 			w.Hub.Publish(progress.Event{
-				Type: "task_progress", TaskID: taskID, Phase: "downloading", Status: "running",
+				Type: "task_progress", Kind: kind, TaskID: taskID, Phase: "downloading", Status: "running",
 				Done: doneFiles, Total: totalFiles, Title: fileName,
 			})
 		},
 	}
 }
 
-func (w *Worker) publishItemProgress(taskID int64, chatID int64, messageID int, status string) {
+func (w *Worker) publishItemProgress(taskID int64, chatID int64, messageID int, status, kind string) {
 	w.Hub.Publish(progress.Event{
-		Type: "task_item_progress", TaskID: taskID, ChatID: chatID, MessageID: messageID, Status: status,
+		Type: "task_item_progress", Kind: kind, TaskID: taskID, ChatID: chatID, MessageID: messageID, Status: status,
 	})
 }
 
@@ -109,6 +112,7 @@ func (w *Worker) runChatTask(ctx context.Context, task *db.Task) error {
 	count, _ := optMap["count"].(float64)
 	toID, _ := optMap["toMessageId"].(float64)
 	watchID, _ := optMap["watchId"].(float64)
+	retryIDs := parseIntSlice(optMap["retryMessageIds"])
 	if chatID == 0 {
 		return fmt.Errorf("任务缺少 chatId")
 	}
@@ -124,6 +128,26 @@ func (w *Worker) runChatTask(ctx context.Context, task *db.Task) error {
 		title = task.Title
 	}
 
+	dlOpt := w.channelDownloadOpts(task.ID)
+
+	// 重试失败项：只下载指定 message id，不推进扫描水位、不继续往后扫
+	if len(retryIDs) > 0 {
+		params := tg.ChatDownloadParams{
+			ChatID:     int64(chatID),
+			Username:   username,
+			ChatTitle:  title,
+			Mode:       "ids",
+			MessageIDs: retryIDs,
+			GroupAlbum: w.Cfg.GroupAlbum,
+		}
+		_, err := w.TG.DownloadChat(ctx, dlOpt, params)
+		_ = w.DB.FailPendingTaskItems(ctx, task.ID, "获取或下载失败")
+		_ = w.DB.ClearTaskRetryMessageIDs(ctx, task.ID)
+		_ = w.DB.RefreshDialogDownloadCounts(ctx, db.DefaultTGAccountID)
+		w.publishChannelProgress(task.ID)
+		return err
+	}
+
 	mode := "batch"
 	afterID := 0
 	switch task.Source {
@@ -137,10 +161,9 @@ func (w *Worker) runChatTask(ctx context.Context, task *db.Task) error {
 		}
 	}
 
-	dlOpt := w.channelDownloadOpts(task.ID)
 	maxMedia := int(count)
 	if maxMedia <= 0 {
-		maxMedia = 500
+		maxMedia = 100
 	}
 	params := tg.ChatDownloadParams{
 		ChatID:         int64(chatID),
@@ -167,6 +190,9 @@ func (w *Worker) runChatTask(ctx context.Context, task *db.Task) error {
 			_ = w.DB.UpsertChatDownloadState(ctx, db.DefaultTGAccountID, int64(chatID), maxID)
 		}
 	}
+	if task.Source == "chat_continue" && int(count) > 0 {
+		_ = w.DB.SetChannelBatchSize(ctx, db.DefaultTGAccountID, int64(chatID), int(count))
+	}
 	if task.Source == "watch" && watchID > 0 {
 		cursor := int(toID)
 		if cursor <= 0 {
@@ -179,6 +205,31 @@ func (w *Worker) runChatTask(ctx context.Context, task *db.Task) error {
 	_ = w.DB.RefreshDialogDownloadCounts(ctx, db.DefaultTGAccountID)
 	w.publishChannelProgress(task.ID)
 	return nil
+}
+
+func parseIntSlice(v any) []int {
+	arr, ok := v.([]any)
+	if !ok || len(arr) == 0 {
+		return nil
+	}
+	out := make([]int, 0, len(arr))
+	for _, x := range arr {
+		switch n := x.(type) {
+		case float64:
+			if int(n) > 0 {
+				out = append(out, int(n))
+			}
+		case int:
+			if n > 0 {
+				out = append(out, n)
+			}
+		case int64:
+			if n > 0 {
+				out = append(out, int(n))
+			}
+		}
+	}
+	return out
 }
 
 func (w *Worker) runWatchSavedTask(ctx context.Context, task *db.Task) error {
@@ -215,7 +266,7 @@ func (w *Worker) runWatchSavedTask(ctx context.Context, task *db.Task) error {
 		}
 		favID = tg.FavoritesChatID(selfID)
 	}
-	opt := w.downloadOpts(task.ID, tg.FavoritesFolderName)
+	opt := w.downloadOpts(task.ID, tg.FavoritesFolderName, "saved")
 	baseOnItem := opt.OnItem
 	opt.OnItem = func(cID int64, messageID int, status, fileName, localPath, errMsg string) {
 		if baseOnItem != nil {

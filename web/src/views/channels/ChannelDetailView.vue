@@ -7,13 +7,15 @@ import {
   NCollapseItem,
   NEmpty,
   NInputNumber,
+  NModal,
   NProgress,
   NSpin,
   NTag,
   useMessage,
 } from "naive-ui";
-import { api, openEventSource } from "../../api/http";
+import { api } from "../../api/http";
 import type { ChannelDownloadInfo, ItemCounts } from "../../api/types";
+import { useAppEvents } from "../../composables/useAppEvents";
 
 defineOptions({ name: "ChannelDetailView" });
 
@@ -23,10 +25,12 @@ const message = useMessage();
 
 const loading = ref(false);
 const submitting = ref(false);
-const batchSize = ref(500);
+const cursorSaving = ref(false);
+const batchSize = ref(100);
 const info = ref<ChannelDownloadInfo | null>(null);
+const cursorModalOpen = ref(false);
+const cursorInput = ref<number | null>(null);
 
-let es: EventSource | null = null;
 let pollTimer: number | null = null;
 
 const chatId = computed(() => {
@@ -57,9 +61,15 @@ function pct(done?: number, total?: number, status?: string) {
   return Math.min(100, Math.round(((done || 0) / total) * 100));
 }
 
-function countsLine(c?: ItemCounts) {
-  if (!c) return "";
-  return `待${c.pending} · 下${c.downloading} · 完${c.done} · 跳${c.skipped} · 败${c.failed}`;
+function countsLine(c?: ItemCounts | null) {
+  const v = (n?: number) => (n == null || Number.isNaN(n) ? "-" : String(n));
+  if (!c) return "待下载 - · 下载中 - · 已完成 - · 跳过 - · 失败 -";
+  return `待下载 ${v(c.pending)} · 下载中 ${v(c.downloading)} · 已完成 ${v(c.done)} · 跳过 ${v(c.skipped)} · 失败 ${v(c.failed)}`;
+}
+
+function displayText(v: unknown, fallback = "-") {
+  if (v == null || v === "") return fallback;
+  return String(v);
 }
 
 function coverageText() {
@@ -79,16 +89,16 @@ function coveragePct() {
   return Math.min(100, Math.round((c / l) * 100));
 }
 
-async function load() {
+async function load(silent = false) {
   if (!chatId.value) return;
-  loading.value = true;
+  if (!silent) loading.value = true;
   try {
     info.value = await api<ChannelDownloadInfo>(`/api/channels/${chatId.value}/download`);
     if (info.value.defaultBatchSize) batchSize.value = info.value.defaultBatchSize;
   } catch (e) {
-    message.error(e instanceof Error ? e.message : "加载失败");
+    if (!silent) message.error(e instanceof Error ? e.message : "加载失败");
   } finally {
-    loading.value = false;
+    if (!silent) loading.value = false;
   }
 }
 
@@ -98,7 +108,7 @@ async function continueDownload() {
   try {
     await api(`/api/channels/${chatId.value}/continue`, {
       method: "POST",
-      body: JSON.stringify({ count: batchSize.value || 500 }),
+      body: JSON.stringify({ count: batchSize.value || 100 }),
     });
     message.success("已开始继续下载");
     await load();
@@ -106,6 +116,50 @@ async function continueDownload() {
     message.error(e instanceof Error ? e.message : "入队失败");
   } finally {
     submitting.value = false;
+  }
+}
+
+function openCursorModal() {
+  cursorInput.value = info.value?.scanCursor ?? 0;
+  cursorModalOpen.value = true;
+}
+
+async function setCursor() {
+  if (!chatId.value || cursorInput.value == null || cursorInput.value < 0) {
+    message.warning("请输入有效的消息 ID");
+    return;
+  }
+  cursorSaving.value = true;
+  try {
+    await api(`/api/channels/${chatId.value}/scan-cursor`, {
+      method: "POST",
+      body: JSON.stringify({ mode: "set", messageId: cursorInput.value }),
+    });
+    message.success(`水位已设为 #${cursorInput.value}`);
+    cursorModalOpen.value = false;
+    await load();
+  } catch (e) {
+    message.error(e instanceof Error ? e.message : "设置失败");
+  } finally {
+    cursorSaving.value = false;
+  }
+}
+
+async function alignCursor() {
+  if (!chatId.value) return;
+  cursorSaving.value = true;
+  try {
+    const res = await api<{ scanCursor: number }>(`/api/channels/${chatId.value}/scan-cursor`, {
+      method: "POST",
+      body: JSON.stringify({ mode: "align" }),
+    });
+    message.success(`已对齐本地最大 #${res.scanCursor}`);
+    cursorModalOpen.value = false;
+    await load();
+  } catch (e) {
+    message.error(e instanceof Error ? e.message : "对齐失败");
+  } finally {
+    cursorSaving.value = false;
   }
 }
 
@@ -131,10 +185,18 @@ async function retryFailed(id: number) {
 
 function applyEvent(raw: string) {
   try {
-    const ev = JSON.parse(raw) as { type?: string; taskId?: number; kind?: string; done?: number; total?: number; status?: string; itemCounts?: ItemCounts };
+    const ev = JSON.parse(raw) as {
+      type?: string;
+      taskId?: number;
+      kind?: string;
+      done?: number;
+      total?: number;
+      status?: string;
+      itemCounts?: ItemCounts;
+    };
     const active = info.value?.activeTask;
     if (!active || !ev.taskId || ev.taskId !== active.id) {
-      if (ev.type === "task_status" || ev.status === "done" || ev.status === "failed") void load();
+      if (ev.type === "task_status" || ev.status === "done" || ev.status === "failed") void load(true);
       return;
     }
     active.progressDone = ev.done ?? active.progressDone;
@@ -142,28 +204,23 @@ function applyEvent(raw: string) {
     if (ev.status) active.status = ev.status;
     if (ev.itemCounts) active.itemCounts = ev.itemCounts;
     if (ev.status === "done" || ev.status === "failed" || ev.status === "cancelled") {
-      void load();
+      void load(true);
     }
   } catch {
     /* ignore */
   }
 }
 
+useAppEvents(applyEvent);
+
 watch(chatId, () => void load());
 
 onMounted(async () => {
   await load();
-  try {
-    es = await openEventSource("/api/events");
-    es.onmessage = (e) => applyEvent(e.data);
-  } catch {
-    /* poll */
-  }
-  pollTimer = window.setInterval(() => void load(), 8000);
+  pollTimer = window.setInterval(() => void load(true), 8000);
 });
 
 onUnmounted(() => {
-  es?.close();
   if (pollTimer != null) window.clearInterval(pollTimer);
 });
 </script>
@@ -202,6 +259,7 @@ onUnmounted(() => {
               <span>每批条数</span>
               <n-input-number v-model:value="batchSize" :min="50" :max="5000" :step="50" size="small" />
             </div>
+            <n-button size="large" secondary @click="openCursorModal">调整水位</n-button>
             <n-button
               type="primary"
               size="large"
@@ -212,16 +270,15 @@ onUnmounted(() => {
               {{ info.caughtUp ? "已追平最新" : info.activeTask ? "下载进行中" : "继续下载" }}
             </n-button>
           </div>
-          <p class="hint">从水位之后向前扫描，去重后下载；同频道同时只跑一批。</p>
         </section>
 
         <section v-if="info.activeTask" class="active">
           <div class="sec-title">进行中</div>
           <div class="batch-card">
             <div class="batch-head">
-              <span>#{{ info.activeTask.id }} {{ info.activeTask.title }}</span>
+              <span>#{{ info.activeTask.id }} {{ displayText(info.activeTask.title) }}</span>
               <n-tag size="small" :bordered="false">
-                {{ taskStatusLabel[info.activeTask.status] || info.activeTask.status }}
+                {{ taskStatusLabel[info.activeTask.status] || displayText(info.activeTask.status) }}
               </n-tag>
             </div>
             <n-progress
@@ -276,14 +333,12 @@ onUnmounted(() => {
               />
               <div v-for="t in info.recentBatches" :key="t.id" class="batch-card dim">
                 <div class="batch-head">
-                  <span>#{{ t.id }} {{ t.title }}</span>
+                  <span>#{{ t.id }} {{ displayText(t.title) }}</span>
                   <n-tag size="small" :bordered="false">
-                    {{ taskStatusLabel[t.status] || t.status }}
+                    {{ taskStatusLabel[t.status] || displayText(t.status) }}
                   </n-tag>
                 </div>
-                <div class="meta">
-                  {{ countsLine(t.itemCounts) || `${t.progressDone || t.doneFiles || 0}/${t.progressTotal || t.totalFiles || 0}` }}
-                </div>
+                <div class="meta">{{ countsLine(t.itemCounts) }}</div>
                 <div v-if="t.status === 'failed' || (t.itemCounts && t.itemCounts.failed > 0)" class="batch-actions">
                   <n-button size="tiny" @click="retryFailed(t.id)">重试失败</n-button>
                 </div>
@@ -293,6 +348,35 @@ onUnmounted(() => {
         </section>
       </template>
     </n-spin>
+
+    <n-modal
+      v-model:show="cursorModalOpen"
+      preset="card"
+      title="调整水位"
+      style="width: 420px; max-width: 92vw"
+      :mask-closable="!cursorSaving"
+    >
+      <div class="cursor-modal">
+        <p class="cursor-meta">
+          当前水位 <b>#{{ info?.scanCursor ?? 0 }}</b>
+          · 本地最大 <b>#{{ info?.localMaxMessageId ?? 0 }}</b>
+          · 对话最新 <b>#{{ info?.lastMessageId || "—" }}</b>
+        </p>
+        <label class="cursor-label">设为指定消息 ID</label>
+        <n-input-number
+          v-model:value="cursorInput"
+          :min="0"
+          :step="1"
+          placeholder="message id"
+          style="width: 100%"
+        />
+        <p class="cursor-hint">下次「继续下载」从该 id 之后扫描；已存在文件仍会去重跳过。</p>
+        <div class="cursor-actions">
+          <n-button :disabled="cursorSaving" @click="alignCursor">对齐本地最大</n-button>
+          <n-button type="primary" :loading="cursorSaving" @click="setCursor">设为水位</n-button>
+        </div>
+      </div>
+    </n-modal>
   </div>
 </template>
 
@@ -366,11 +450,6 @@ onUnmounted(() => {
 .batch-setting :deep(.n-input-number) {
   width: 120px;
 }
-.hint {
-  margin: 12px 0 0;
-  font-size: 12px;
-  color: rgba(255, 255, 255, 0.4);
-}
 .sec-title {
   font-size: 14px;
   font-weight: 600;
@@ -417,5 +496,35 @@ onUnmounted(() => {
 }
 .history {
   margin-top: 8px;
+}
+.cursor-modal {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.cursor-meta {
+  margin: 0;
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.55);
+  line-height: 1.5;
+}
+.cursor-meta b {
+  color: rgba(255, 255, 255, 0.9);
+  font-weight: 600;
+}
+.cursor-label {
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.7);
+}
+.cursor-hint {
+  margin: 0;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.4);
+}
+.cursor-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 4px;
 }
 </style>

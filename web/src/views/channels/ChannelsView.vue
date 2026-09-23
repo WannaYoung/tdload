@@ -158,7 +158,6 @@ onMounted(() => void load());
     <header class="head">
       <div>
         <h2>频道</h2>
-        <p>按频道分批补齐多媒体。点「下载」进入详情查看进度并继续下载。</p>
       </div>
       <n-button secondary :loading="loading" @click="load">刷新</n-button>
     </header>
@@ -184,11 +183,6 @@ onMounted(() => void load());
 .head h2 {
   margin: 0;
   font-size: 22px;
-}
-.head p {
-  margin: 6px 0 0;
-  color: rgba(255, 255, 255, 0.45);
-  font-size: 13px;
 }
 .pager {
   display: flex;

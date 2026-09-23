@@ -109,6 +109,22 @@ func sourcesForKind(kind string) []string {
 	}
 }
 
+func (d *DB) HasActiveSavedSyncTask(ctx context.Context) (bool, int64, error) {
+	var id int64
+	err := d.SQL.QueryRowContext(ctx, `
+SELECT id FROM tasks
+WHERE status IN ('queued','running','paused')
+  AND source = 'saved_all'
+ORDER BY id DESC LIMIT 1`).Scan(&id)
+	if err == sql.ErrNoRows {
+		return false, 0, nil
+	}
+	if err != nil {
+		return false, 0, err
+	}
+	return true, id, nil
+}
+
 func (d *DB) ListTasks(ctx context.Context, kind string, limit, offset int) ([]*Task, int, error) {
 	if limit <= 0 {
 		limit = 50
@@ -437,6 +453,68 @@ UPDATE task_items SET status='pending', error='' WHERE task_id=? AND status='fai
 		return 0, err
 	}
 	return res.RowsAffected()
+}
+
+func (d *DB) ListFailedTaskItemMessageIDs(ctx context.Context, taskID int64) ([]int, error) {
+	rows, err := d.SQL.QueryContext(ctx, `
+SELECT message_id FROM task_items WHERE task_id=? AND status='failed' ORDER BY message_id`, taskID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []int
+	for rows.Next() {
+		var mid int
+		if err := rows.Scan(&mid); err != nil {
+			return nil, err
+		}
+		if mid > 0 {
+			out = append(out, mid)
+		}
+	}
+	return out, rows.Err()
+}
+
+func (d *DB) FailPendingTaskItems(ctx context.Context, taskID int64, errMsg string) error {
+	_, err := d.SQL.ExecContext(ctx, `
+UPDATE task_items SET status='failed', error=? WHERE task_id=? AND status='pending'`, errMsg, taskID)
+	return err
+}
+
+func (d *DB) SetTaskRetryMessageIDs(ctx context.Context, taskID int64, ids []int) error {
+	task, err := d.GetTask(ctx, taskID)
+	if err != nil || task == nil {
+		return err
+	}
+	var m map[string]any
+	_ = json.Unmarshal([]byte(task.OptionsJSON), &m)
+	if m == nil {
+		m = map[string]any{}
+	}
+	arr := make([]any, 0, len(ids))
+	for _, id := range ids {
+		arr = append(arr, id)
+	}
+	m["retryMessageIds"] = arr
+	b, _ := json.Marshal(m)
+	_, err = d.SQL.ExecContext(ctx, `UPDATE tasks SET options_json=? WHERE id=?`, string(b), taskID)
+	return err
+}
+
+func (d *DB) ClearTaskRetryMessageIDs(ctx context.Context, taskID int64) error {
+	task, err := d.GetTask(ctx, taskID)
+	if err != nil || task == nil {
+		return err
+	}
+	var m map[string]any
+	_ = json.Unmarshal([]byte(task.OptionsJSON), &m)
+	if m == nil {
+		return nil
+	}
+	delete(m, "retryMessageIds")
+	b, _ := json.Marshal(m)
+	_, err = d.SQL.ExecContext(ctx, `UPDATE tasks SET options_json=? WHERE id=?`, string(b), taskID)
+	return err
 }
 
 type scanner interface {

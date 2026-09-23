@@ -163,7 +163,6 @@ onMounted(() => void load());
     <header class="head">
       <div>
         <h2>Telegram</h2>
-        <p>使用手机号验证码登录；会话保存在配置目录，重启后可复用。</p>
       </div>
       <n-button secondary :loading="loading" @click="load">刷新</n-button>
     </header>
@@ -286,11 +285,6 @@ onMounted(() => void load());
 .head h2 {
   margin: 0;
   font-size: 22px;
-}
-.head p {
-  margin: 6px 0 0;
-  color: rgba(255, 255, 255, 0.45);
-  font-size: 13px;
 }
 .block {
   margin-bottom: 14px;

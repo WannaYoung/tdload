@@ -113,11 +113,8 @@ func SyncDisk(ctx context.Context, database *db.DB, downloadDir string, favorite
 	if err != nil {
 		return nil, err
 	}
-	cursors, err := database.RebuildScanCursorsFromMedia(ctx, db.DefaultTGAccountID, favoritesChatID)
-	if err != nil {
-		return nil, err
-	}
-	return &SyncResult{Kept: kept, Pruned: pruned, Imported: imported, CursorsUpdated: cursors}, nil
+	// 扫盘只维护 media_index，不改动频道/收藏任何水位
+	return &SyncResult{Kept: kept, Pruned: pruned, Imported: imported, CursorsUpdated: 0}, nil
 }
 
 func parseIndexedPath(rel string, favoritesChatID int64) (chatID int64, messageID int, fileName string, ok bool) {

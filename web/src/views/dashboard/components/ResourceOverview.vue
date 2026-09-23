@@ -58,7 +58,7 @@ const emit = defineEmits<{
         </div>
       </button>
 
-      <button class="resource" type="button" @click="emit('navigate', 'tasks')">
+      <button class="resource" type="button" @click="emit('navigate', 'saved')">
         <div class="resource-icon tone-fav">
           <n-icon :component="HeartOutline" :size="20" />
         </div>

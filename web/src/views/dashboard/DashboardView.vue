@@ -11,9 +11,10 @@ import {
   PlayCircleOutline,
   RefreshOutline,
 } from "@vicons/ionicons5";
-import { api, openEventSource } from "../../api/http";
+import { api } from "../../api/http";
 import type { DashboardStats } from "../../api/types";
 import { useAuthStore } from "../../stores/auth";
+import { useAppEvents } from "../../composables/useAppEvents";
 import ResourceOverview from "./components/ResourceOverview.vue";
 import RecentTaskList, { type RecentTask } from "./components/RecentTaskList.vue";
 
@@ -121,7 +122,6 @@ async function refresh(silent = false) {
   }
 }
 
-let es: EventSource | null = null;
 let pollTimer: number | null = null;
 let refreshTimer: number | null = null;
 
@@ -171,19 +171,14 @@ function applyEvent(raw: string) {
   }
 }
 
+useAppEvents(applyEvent);
+
 onMounted(async () => {
   await refresh(false);
-  try {
-    es = await openEventSource("/api/events");
-    es.onmessage = (e) => applyEvent(e.data);
-  } catch {
-    /* poll */
-  }
   pollTimer = window.setInterval(() => void refresh(true), 12000);
 });
 
 onUnmounted(() => {
-  es?.close();
   if (pollTimer != null) window.clearInterval(pollTimer);
   if (refreshTimer != null) window.clearTimeout(refreshTimer);
 });

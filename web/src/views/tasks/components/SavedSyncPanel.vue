@@ -42,6 +42,10 @@ const completedCount = computed(
   () => tasks.value.filter((t) => t.status === "done" || t.status === "cancelled" || t.status === "failed").length,
 );
 
+const hasActiveSync = computed(() =>
+  tasks.value.some((t) => t.status === "queued" || t.status === "running" || t.status === "paused"),
+);
+
 function formatSyncTime(iso: string) {
   if (!iso) return "—";
   const t = Date.parse(iso);
@@ -75,24 +79,28 @@ function savedFailed(t: SavedTask) {
   return t.itemCounts?.failed ?? 0;
 }
 
-async function load() {
-  loading.value = true;
+async function load(silent = false) {
+  if (!silent) loading.value = true;
   try {
     const page = await api<{ items: SavedTask[] }>("/api/tasks?kind=saved&page=1&pageSize=50");
     tasks.value = page.items || [];
   } catch (e) {
-    message.error(e instanceof Error ? e.message : "加载失败");
+    if (!silent) message.error(e instanceof Error ? e.message : "加载失败");
   } finally {
-    loading.value = false;
+    if (!silent) loading.value = false;
   }
 }
 
 async function createTask() {
   submitting.value = true;
   try {
-    await api("/api/tasks", { method: "POST", body: JSON.stringify({ source: "saved_all" }) });
+    const task = await api<SavedTask>("/api/tasks", {
+      method: "POST",
+      body: JSON.stringify({ source: "saved_all" }),
+    });
     message.success("已开始同步");
-    await load();
+    const rest = tasks.value.filter((t) => t.id !== task.id);
+    tasks.value = [task, ...rest];
   } catch (e) {
     message.error(e instanceof Error ? e.message : "创建失败");
   } finally {
@@ -126,23 +134,34 @@ async function clearCompleted() {
 
 function applyProgress(ev: {
   taskId?: number;
+  kind?: string;
+  type?: string;
   done?: number;
   total?: number;
   status?: string;
   itemCounts?: ItemCounts;
 }) {
-  const saved = tasks.value.find((x) => x.id === ev.taskId);
-  if (!saved) return false;
+  if (ev.kind && ev.kind !== "saved") return false;
+  // 单条媒体进度事件不要覆盖任务状态（其 status 是 downloading/skipped/done 等条目态）
+  if (ev.type === "task_item_progress" && !ev.itemCounts && ev.done == null && ev.total == null) {
+    return tasks.value.some((x) => x.id === ev.taskId);
+  }
+  const idx = tasks.value.findIndex((x) => x.id === ev.taskId);
+  if (idx < 0) return false;
+  const row = { ...tasks.value[idx] };
   if (ev.done != null) {
-    saved.progressDone = ev.done;
-    saved.doneFiles = ev.done;
+    row.progressDone = ev.done;
+    row.doneFiles = ev.done;
   }
   if (ev.total != null) {
-    saved.progressTotal = ev.total;
-    saved.totalFiles = ev.total;
+    row.progressTotal = ev.total;
+    row.totalFiles = ev.total;
   }
-  if (ev.status) saved.status = ev.status;
-  if (ev.itemCounts) saved.itemCounts = ev.itemCounts;
+  if (ev.status && ev.type !== "task_item_progress") {
+    row.status = ev.status;
+  }
+  if (ev.itemCounts) row.itemCounts = { ...ev.itemCounts };
+  tasks.value.splice(idx, 1, row);
   return true;
 }
 
@@ -184,75 +203,49 @@ watch(
   { immediate: true },
 );
 
-defineExpose({ reload: load, loading, applyProgress });
+defineExpose({
+  reload: (silent?: boolean) => load(!!silent),
+  loading,
+  applyProgress,
+  clearCompleted,
+  createTask,
+  clearing,
+  submitting,
+  hasActiveSync,
+  completedCount,
+});
 </script>
 
 <template>
   <div class="panel">
-    <div class="list-meta">
-      <span class="section-title">同步记录</span>
-      <div class="meta-actions">
-        <n-button
-          size="small"
-          type="primary"
-          secondary
-          :loading="clearing"
-          :disabled="completedCount <= 0"
-          @click="clearCompleted"
-        >
-          清除完成
-        </n-button>
-        <n-button size="small" type="primary" secondary :loading="submitting" @click="createTask">
-          开始同步
-        </n-button>
-      </div>
-    </div>
     <div class="table-wrap message-table">
-      <n-empty v-if="!tasks.length && !loading" description="暂无同步记录" />
       <n-data-table
-        v-else
-        flex-height
         :columns="columns"
         :data="tasks"
         :bordered="false"
         size="small"
+        :loading="loading"
         :row-key="(r: SavedTask) => r.id"
-      />
+      >
+        <template #empty>
+          <n-empty description="暂无同步记录" />
+        </template>
+      </n-data-table>
     </div>
   </div>
 </template>
 
 <style scoped>
 .panel {
-  display: contents;
-}
-.list-meta {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  flex-shrink: 0;
-  font-size: 13px;
-  color: rgba(255, 255, 255, 0.55);
-}
-.meta-actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-shrink: 0;
-}
-.section-title {
-  font-size: 14px;
-  font-weight: 600;
-  color: rgba(255, 255, 255, 0.85);
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
 }
 .message-table {
-  overflow: hidden;
-}
-.message-table :deep(.n-data-table) {
-  height: 100%;
-}
-.message-table :deep(.n-data-table-base-table) {
-  height: 100%;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
 }
 </style>

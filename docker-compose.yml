@@ -1,7 +1,7 @@
 services:
   tdload:
+    image: wannayoung/tdload:latest
     build: .
-    image: tdload:local
     container_name: tdload
     restart: unless-stopped
     ports:

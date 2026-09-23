@@ -24,6 +24,9 @@ export type DashboardStats = {
   tasksFailed: number;
   tasksPaused: number;
   tasksDone: number;
+  tasksMessageActive?: number;
+  tasksSavedActive?: number;
+  tasksChannelActive?: number;
   media: number;
   downloadDir: string;
   diskUsed: number;
@@ -130,6 +133,7 @@ export type ChannelDownloadInfo = {
   downloadedCount: number;
   lastMessageId: number;
   scanCursor: number;
+  localMaxMessageId?: number;
   caughtUp: boolean;
   failedCount: number;
   status: string;

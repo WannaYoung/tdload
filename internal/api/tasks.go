@@ -38,6 +38,10 @@ func (s *Server) handleCreateTasks(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusBadRequest, "收藏缓存为空，请先在 Telegram 页同步收藏")
 			return
 		}
+		if ok, id, _ := s.DB.HasActiveSavedSyncTask(r.Context()); ok {
+			writeErr(w, http.StatusConflict, fmt.Sprintf("已有进行中的收藏同步 #%d", id))
+			return
+		}
 		opt, _ := json.Marshal(map[string]any{"outSubdir": "我的收藏"})
 		task, err := s.DB.CreateTask(r.Context(), "saved_all", "收藏同步", string(opt), n)
 		if err != nil {
@@ -68,7 +72,7 @@ func (s *Server) handleCreateTasks(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		if source == "chat_continue" && body.Count <= 0 {
-			body.Count = 500
+			body.Count = 100
 		}
 		opt, _ := json.Marshal(map[string]any{
 			"chatId": body.ChatID, "fromMessageId": body.FromMessageID, "count": body.Count,

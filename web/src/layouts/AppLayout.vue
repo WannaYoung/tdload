@@ -17,6 +17,7 @@ import {
   EyeOutline,
   FolderOpenOutline,
   GridOutline,
+  HeartOutline,
   PeopleOutline,
   LogOutOutline,
   MenuOutline,
@@ -40,7 +41,9 @@ const dialog = useDialog();
 const isMobile = useMobile();
 const menuOpen = ref(false);
 const siderCollapsed = ref(false);
-const activeTaskCount = ref(0);
+const messageActive = ref(0);
+const savedActive = ref(0);
+const channelActive = ref(0);
 
 let taskCountTimer: number | null = null;
 
@@ -48,27 +51,34 @@ function icon(comp: typeof GridOutline) {
   return () => h(NIcon, null, { default: () => h(comp) });
 }
 
-function badgeText() {
-  return activeTaskCount.value > 99 ? "99+" : String(activeTaskCount.value);
+function badgeText(n: number) {
+  return n > 99 ? "99+" : String(n);
 }
 
-function renderBadge(extraStyle = "") {
-  return h("span", { style: BADGE_STYLE + extraStyle }, badgeText());
+function renderBadge(n: number, extraStyle = "") {
+  return h("span", { style: BADGE_STYLE + extraStyle }, badgeText(n));
 }
 
-function tasksIcon() {
-  const iconNode = () => h(NIcon, null, { default: () => h(CloudDownloadOutline) });
-  if (!siderCollapsed.value || activeTaskCount.value <= 0) return iconNode;
+function menuIcon(comp: typeof GridOutline, count: number) {
+  const iconNode = () => h(NIcon, null, { default: () => h(comp) });
+  if (!siderCollapsed.value || count <= 0) return iconNode;
   return () =>
     h(
       "span",
       { style: "position:relative;display:inline-flex;align-items:center;justify-content:center;" },
-      [iconNode(), renderBadge("position:absolute;top:-4px;right:-8px;")],
+      [iconNode(), renderBadge(count, "position:absolute;top:-4px;right:-8px;")],
     );
 }
 
-function tasksLabelDesktop() {
-  if (activeTaskCount.value <= 0) return "任务";
+function menuLabel(text: string, count: number) {
+  if (count <= 0) return text;
+  if (isMobile.value) {
+    return () =>
+      h("span", { style: "position:relative;display:block;width:100%;" }, [
+        text,
+        renderBadge(count, "position:absolute;right:0;top:50%;transform:translateY(-50%);"),
+      ]);
+  }
   return () =>
     h(
       "span",
@@ -76,32 +86,36 @@ function tasksLabelDesktop() {
         style:
           "display:flex;align-items:center;justify-content:space-between;width:100%;gap:8px;",
       },
-      [h("span", null, "任务"), renderBadge()],
+      [h("span", null, text), renderBadge(count)],
     );
-}
-
-function tasksLabelMobile() {
-  if (activeTaskCount.value <= 0) return "任务";
-  return () =>
-    h("span", { style: "position:relative;display:block;width:100%;" }, [
-      "任务",
-      renderBadge("position:absolute;right:0;top:50%;transform:translateY(-50%);"),
-    ]);
 }
 
 const menuOptions = computed<MenuOption[]>(() => [
   { label: "仪表盘", key: "dashboard", icon: icon(GridOutline) },
   { label: "Telegram", key: "telegram", icon: icon(PaperPlaneOutline) },
-  { label: "频道", key: "channels", icon: icon(PeopleOutline) },
   {
-    label: isMobile.value ? tasksLabelMobile() : tasksLabelDesktop(),
-    key: "tasks",
-    icon: tasksIcon(),
+    label: menuLabel("收藏", savedActive.value),
+    key: "saved",
+    icon: menuIcon(HeartOutline, savedActive.value),
   },
-  { label: "资源库", key: "library", icon: icon(FolderOpenOutline) },
+  {
+    label: menuLabel("频道", channelActive.value),
+    key: "channels",
+    icon: menuIcon(PeopleOutline, channelActive.value),
+  },
+  {
+    label: menuLabel("任务", messageActive.value),
+    key: "tasks",
+    icon: menuIcon(CloudDownloadOutline, messageActive.value),
+  },
   { label: "监听", key: "watch", icon: icon(EyeOutline) },
+  { label: "资源库", key: "library", icon: icon(FolderOpenOutline) },
   { label: "设置", key: "settings", icon: icon(SettingsOutline) },
 ]);
+
+const headerBadgeTotal = computed(
+  () => messageActive.value + savedActive.value + channelActive.value,
+);
 
 const dropdownOptions = computed<DropdownOption[]>(() => [
   ...menuOptions.value,
@@ -124,7 +138,11 @@ const dropdownOptions = computed<DropdownOption[]>(() => [
   },
 ]);
 
-const activeKey = computed(() => String(route.name || "dashboard"));
+const activeKey = computed(() => {
+  const name = String(route.name || "dashboard");
+  if (name === "channel-detail") return "channels";
+  return name;
+});
 
 const contentClass = computed(() => {
   const embedMeta = route.meta.embedScroll;
@@ -137,12 +155,14 @@ const contentClass = computed(() => {
   };
 });
 
-const keepAliveNames = ["TasksView", "LibraryView"];
+const keepAliveNames = ["LibraryView"];
 
 async function refreshActiveTaskCount() {
   try {
     const s = await api<DashboardStats>("/api/dashboard");
-    activeTaskCount.value = s.tasksRunning + s.tasksQueued;
+    messageActive.value = s.tasksMessageActive ?? 0;
+    savedActive.value = s.tasksSavedActive ?? 0;
+    channelActive.value = s.tasksChannelActive ?? 0;
   } catch {
     /* keep */
   }
@@ -180,42 +200,40 @@ function onDropdownSelect(key: string) {
   void router.push({ name: key });
 }
 
+function goHome() {
+  void router.push({ name: "dashboard" });
+}
+
 function confirmLogout() {
   dialog.warning({
     title: "退出登录",
-    content: "确定退出当前帐户？退出后需重新登录才能继续使用。",
+    content: "确定退出当前账号？",
     positiveText: "退出",
     negativeText: "取消",
-    onPositiveClick: () => logout(),
+    onPositiveClick: () => {
+      auth.logout();
+      void router.push({ name: "login" });
+    },
   });
-}
-
-function logout() {
-  auth.logout();
-  void router.push({ name: "login" });
-}
-
-function goHome() {
-  menuOpen.value = false;
-  void router.push({ name: "dashboard" });
 }
 </script>
 
 <template>
-  <n-layout :has-sider="!isMobile" class="root-layout">
+  <n-layout has-sider class="root-layout" :class="{ mobile: isMobile }">
     <n-layout-sider
       v-if="!isMobile"
       bordered
       collapse-mode="width"
-      :collapsed="siderCollapsed"
       :collapsed-width="64"
       :width="220"
+      :collapsed="siderCollapsed"
       show-trigger
-      @update:collapsed="siderCollapsed = $event"
+      @collapse="siderCollapsed = true"
+      @expand="siderCollapsed = false"
     >
       <button class="brand" type="button" @click="goHome">
         <n-icon size="22" :component="PaperPlaneOutline" />
-        <span>TDLoad</span>
+        <span v-if="!siderCollapsed">TDLoad</span>
       </button>
       <n-menu
         :value="activeKey"
@@ -246,8 +264,8 @@ function goHome() {
               <n-button quaternary circle aria-label="菜单">
                 <n-icon size="22" :component="MenuOutline" />
               </n-button>
-              <span v-if="activeTaskCount > 0" class="header-task-badge">
-                {{ activeTaskCount > 99 ? "99+" : activeTaskCount }}
+              <span v-if="headerBadgeTotal > 0" class="header-task-badge">
+                {{ headerBadgeTotal > 99 ? "99+" : headerBadgeTotal }}
               </span>
             </span>
           </n-dropdown>
@@ -338,18 +356,15 @@ function goHome() {
   display: flex;
   align-items: center;
   gap: 8px;
-  min-width: 0;
-}
-.brand-btn {
-  display: flex;
-  align-items: center;
-  gap: 8px;
   border: 0;
-  padding: 0;
   background: transparent;
   color: inherit;
   font: inherit;
   cursor: pointer;
+  padding: 0;
+}
+.brand-btn .n-icon {
+  color: #f472b6;
 }
 .brand-text {
   font-weight: 650;
@@ -361,70 +376,59 @@ function goHome() {
   gap: 12px;
 }
 .muted {
-  color: rgba(255, 255, 255, 0.55);
+  color: rgba(255, 255, 255, 0.45);
   font-size: 13px;
+}
+.menu-btn-wrap {
+  position: relative;
+  display: inline-flex;
+}
+.header-task-badge {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: #f472b6;
+  color: #500724;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 16px;
+  text-align: center;
+  pointer-events: none;
 }
 
 .main-content {
   flex: 1 1 auto;
-  min-width: 0;
   min-height: 0;
+  min-width: 0;
   overflow: auto;
-  overscroll-behavior: contain;
   padding: 20px 28px 32px;
   box-sizing: border-box;
 }
 .main-content.mobile {
-  padding: 12px 14px 24px;
+  padding: 12px 12px 20px;
 }
-.main-content.bleed,
-.main-content.embed {
+.main-content.bleed {
   padding: 0;
+}
+.main-content.embed {
   overflow: hidden;
   display: flex;
   flex-direction: column;
+  padding: 0;
 }
 .main-content.embed > :deep(*) {
   flex: 1 1 auto;
   min-height: 0;
-  height: 100%;
 }
 
-.menu-btn-wrap {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
+:deep(.n-layout-sider) {
+  background: #18181c !important;
 }
-.header-task-badge {
-  position: absolute;
-  top: -2px;
-  right: -4px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 18px;
-  height: 18px;
-  padding: 0 5px;
-  border-radius: 9px;
-  background: #f472b6;
-  color: #500724;
-  font-size: 11px;
-  font-weight: 600;
-  line-height: 1;
-  pointer-events: none;
-}
-:deep(.n-dropdown-menu .n-dropdown-option-body) {
-  justify-content: flex-start;
-}
-:deep(.n-dropdown-option--disabled .n-dropdown-option-body) {
-  opacity: 1;
-  cursor: default;
-}
-:deep(.n-menu-item-content-header) {
-  display: flex !important;
-  align-items: center;
-  min-width: 0;
-  width: 100%;
+:deep(.n-menu) {
+  background: transparent;
 }
 </style>

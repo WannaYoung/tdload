@@ -122,7 +122,7 @@ async function syncDisk() {
       },
     );
     message.success(
-      `同步完成：保留 ${data.kept}，清理 ${data.pruned}，导入 ${data.imported}，水位更新 ${data.cursorsUpdated ?? 0}`,
+      `同步完成：保留 ${data.kept}，清理 ${data.pruned}，导入 ${data.imported}`,
     );
     await loadFilters();
     await load();
@@ -301,6 +301,8 @@ onUnmounted(() => {
 h2 {
   margin: 0;
   font-size: 22px;
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 .toolbar {
   display: flex;
@@ -314,6 +316,9 @@ h2 {
   align-items: center;
   gap: 4px;
   flex-shrink: 0;
+  /* 覆盖全局窄屏 width:100%，避免标题被挤成竖排 */
+  width: auto;
+  margin-left: auto;
 }
 .filters {
   display: flex;

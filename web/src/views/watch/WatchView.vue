@@ -5,16 +5,17 @@ import {
   NDataTable,
   NEmpty,
   NSelect,
-  NSpin,
   useMessage,
   type DataTableColumns,
 } from "naive-ui";
 import { api } from "../../api/http";
+import { useMobile } from "../../composables/useMobile";
 import type { WatchCandidate, WatchRow } from "../../api/types";
 
 defineOptions({ name: "WatchView" });
 
 const message = useMessage();
+const isMobile = useMobile();
 const loading = ref(false);
 const adding = ref(false);
 const rows = ref<WatchRow[]>([]);
@@ -107,17 +108,17 @@ async function loadCandidates() {
   }
 }
 
-async function load() {
-  loading.value = true;
+async function load(silent = false) {
+  if (!silent) loading.value = true;
   try {
     const data = await api<{ items: WatchRow[]; watchIntervalMinutes?: number }>("/api/watch");
     rows.value = data.items || [];
     if (data.watchIntervalMinutes) intervalMinutes.value = data.watchIntervalMinutes;
     await loadCandidates();
   } catch (e) {
-    message.error(e instanceof Error ? e.message : "加载失败");
+    if (!silent) message.error(e instanceof Error ? e.message : "加载失败");
   } finally {
-    loading.value = false;
+    if (!silent) loading.value = false;
   }
 }
 
@@ -154,7 +155,7 @@ async function remove(row: WatchRow) {
 
 onMounted(() => {
   void load();
-  timer = window.setInterval(() => void load(), 30_000);
+  timer = window.setInterval(() => void load(true), 30_000);
 });
 
 onUnmounted(() => {
@@ -163,38 +164,47 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="page list-page pinned">
+  <div class="page list-page" :class="{ pinned: !isMobile }">
     <div class="toolbar">
-      <div>
+      <div class="toolbar-left">
         <h2>监听</h2>
-        <p>按设置间隔扫描增量消息并自动入队（当前间隔 {{ intervalMinutes }} 分钟）。</p>
+        <span class="interval">间隔 {{ intervalMinutes }} 分钟</span>
       </div>
-      <n-button quaternary :loading="loading" @click="load">刷新</n-button>
+      <div class="toolbar-actions">
+        <n-button quaternary :loading="loading" @click="load(false)">刷新</n-button>
+      </div>
     </div>
 
-    <div class="add-row">
-      <n-select
-        v-model:value="selectedChatId"
-        class="chat-select"
-        filterable
-        clearable
-        placeholder="选择要监听的频道"
-        :options="selectOptions()"
-        :disabled="loading || !candidates.length"
-      />
-      <n-button type="primary" :loading="adding" :disabled="selectedChatId == null" @click="addWatch">
-        添加监听
-      </n-button>
-    </div>
-
-    <div class="table-wrap">
-      <n-spin :show="loading" class="spin-fill">
-        <n-empty
-          v-if="!rows.length && !loading"
-          description="暂无监听。可先添加「我的收藏」或已同步的频道。"
+    <div class="panel">
+      <div class="composer row">
+        <n-select
+          v-model:value="selectedChatId"
+          class="composer-input"
+          filterable
+          clearable
+          placeholder="选择要监听的频道"
+          :options="selectOptions()"
+          :disabled="loading || !candidates.length"
         />
-        <n-data-table v-else :columns="columns" :data="rows" :bordered="false" size="small" />
-      </n-spin>
+        <n-button type="primary" :loading="adding" :disabled="selectedChatId == null" @click="addWatch">
+          添加监听
+        </n-button>
+      </div>
+
+      <div class="table-wrap message-table">
+        <n-data-table
+          :columns="columns"
+          :data="rows"
+          :bordered="false"
+          size="small"
+          :loading="loading"
+          :row-key="(r: WatchRow) => r.id"
+        >
+          <template #empty>
+            <n-empty description="暂无监听。可先添加「我的收藏」或已同步的频道。" />
+          </template>
+        </n-data-table>
+      </div>
     </div>
   </div>
 </template>
@@ -203,31 +213,57 @@ onUnmounted(() => {
 h2 {
   margin: 0;
   font-size: 22px;
+  flex-shrink: 0;
 }
 .toolbar {
-  display: flex;
-  align-items: flex-start;
+  flex-wrap: nowrap;
+  align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  gap: 16px;
 }
-.toolbar p {
-  margin: 6px 0 0;
+.toolbar-left {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  min-width: 0;
+}
+.interval {
   color: rgba(255, 255, 255, 0.45);
   font-size: 13px;
+  white-space: nowrap;
 }
-.add-row {
+.toolbar-actions {
   display: flex;
-  align-items: center;
-  gap: 10px;
-  flex-wrap: nowrap;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-left: auto;
 }
-.chat-select {
+.panel {
+  display: flex;
+  flex-direction: column;
   flex: 1 1 auto;
-  min-width: 180px;
-  max-width: 480px;
+  min-height: 0;
+  width: 100%;
+  gap: 12px;
 }
-.spin-fill {
-  min-height: 120px;
+.composer {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  flex-shrink: 0;
+}
+.composer.row {
+  flex-direction: row;
+  align-items: flex-start;
+}
+.composer-input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.message-table {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
 }
 :deep(.name-cell) {
   min-width: 0;
@@ -241,13 +277,12 @@ h2 {
   font-size: 12px;
   color: rgba(255, 255, 255, 0.4);
 }
-@media (max-width: 640px) {
-  .add-row {
-    flex-wrap: wrap;
+@media (max-width: 1000px) {
+  .composer.row {
+    flex-direction: column;
   }
-  .chat-select {
-    max-width: none;
-    width: 100%;
+  .composer.row > .n-button {
+    align-self: flex-end;
   }
 }
 </style>

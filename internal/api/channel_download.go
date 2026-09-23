@@ -21,6 +21,11 @@ func (s *Server) handleChannelDownload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	cursor, _ := s.DB.GetScanCursor(r.Context(), db.DefaultTGAccountID, chatID)
+	localMax, _ := s.DB.MaxDownloadedMessageID(r.Context(), chatID)
+	batchSize, _ := s.DB.GetChannelBatchSize(r.Context(), db.DefaultTGAccountID, chatID)
+	if batchSize <= 0 {
+		batchSize = 100
+	}
 	failedCount, _ := s.DB.CountFailedItemsForChatActive(r.Context(), chatID)
 	caughtUp := d.LastMessageID > 0 && cursor >= d.LastMessageID
 
@@ -58,20 +63,21 @@ func (s *Server) handleChannelDownload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeOK(w, map[string]any{
-		"chatId":           d.ChatID,
-		"title":            d.Title,
-		"username":         d.Username,
-		"kind":             d.Kind,
-		"downloadedCount":  d.DownloadedCount,
-		"lastMessageId":    d.LastMessageID,
-		"scanCursor":       cursor,
-		"caughtUp":         caughtUp,
-		"failedCount":      failedCount,
-		"status":           status,
-		"syncedAt":         d.SyncedAt,
-		"activeTask":       activeView,
-		"recentBatches":    historyViews,
-		"defaultBatchSize": 500,
+		"chatId":            d.ChatID,
+		"title":             d.Title,
+		"username":          d.Username,
+		"kind":              d.Kind,
+		"downloadedCount":   d.DownloadedCount,
+		"lastMessageId":     d.LastMessageID,
+		"scanCursor":        cursor,
+		"localMaxMessageId": localMax,
+		"caughtUp":          caughtUp,
+		"failedCount":       failedCount,
+		"status":            status,
+		"syncedAt":          d.SyncedAt,
+		"activeTask":        activeView,
+		"recentBatches":     historyViews,
+		"defaultBatchSize":  batchSize,
 	})
 }
 
@@ -86,7 +92,7 @@ func (s *Server) handleChannelContinue(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = jsonDecodeOptional(r, &body)
 	if body.Count <= 0 {
-		body.Count = 500
+		body.Count = 100
 	}
 	if body.Count > 5000 {
 		body.Count = 5000
@@ -124,4 +130,66 @@ func (s *Server) handleChannelContinue(w http.ResponseWriter, r *http.Request) {
 		s.Worker.Enqueue(task.ID)
 	}
 	writeOK(w, taskViewEnriched(s, r, task))
+}
+
+// handleChannelScanCursor 调整频道历史扫描水位。
+// body: { "mode": "set", "messageId": N } 或 { "mode": "align" }（对齐本地 media_index 最大 id）
+func (s *Server) handleChannelScanCursor(w http.ResponseWriter, r *http.Request) {
+	chatID, err := pathID(r, "chatId")
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "无效 chatId")
+		return
+	}
+	var body struct {
+		Mode      string `json:"mode"`
+		MessageID int    `json:"messageId"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeErr(w, http.StatusBadRequest, "无效请求体")
+		return
+	}
+	d, err := s.DB.GetTGDialog(r.Context(), db.DefaultTGAccountID, chatID)
+	if err != nil || d == nil {
+		writeErr(w, http.StatusNotFound, "频道不存在，请先在 Telegram 页同步")
+		return
+	}
+
+	localMax, _ := s.DB.MaxDownloadedMessageID(r.Context(), chatID)
+	mode := body.Mode
+	if mode == "" {
+		if body.MessageID > 0 {
+			mode = "set"
+		} else {
+			mode = "align"
+		}
+	}
+	switch mode {
+	case "align":
+		if err := s.DB.SyncScanCursorForChat(r.Context(), db.DefaultTGAccountID, chatID); err != nil {
+			writeErr(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+	case "set":
+		if body.MessageID < 0 {
+			writeErr(w, http.StatusBadRequest, "messageId 不能为负数")
+			return
+		}
+		if err := s.DB.SetScanCursor(r.Context(), db.DefaultTGAccountID, chatID, body.MessageID); err != nil {
+			writeErr(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+	default:
+		writeErr(w, http.StatusBadRequest, "mode 应为 set 或 align")
+		return
+	}
+
+	cursor, _ := s.DB.GetScanCursor(r.Context(), db.DefaultTGAccountID, chatID)
+	caughtUp := d.LastMessageID > 0 && cursor >= d.LastMessageID
+	writeOK(w, map[string]any{
+		"chatId":            chatID,
+		"scanCursor":        cursor,
+		"localMaxMessageId": localMax,
+		"lastMessageId":     d.LastMessageID,
+		"caughtUp":          caughtUp,
+	})
 }

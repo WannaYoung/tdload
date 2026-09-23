@@ -274,7 +274,7 @@ ON CONFLICT(tg_account_id, chat_id) DO UPDATE SET
 	return err
 }
 
-// SetScanCursor 强制写入扫描水位（允许下调，供扫盘同步对齐磁盘）。
+// SetScanCursor 强制写入扫描水位（允许上调或下调）。
 func (d *DB) SetScanCursor(ctx context.Context, accountID, chatID int64, lastMessageID int) error {
 	now := time.Now().UTC().Format(time.RFC3339)
 	if lastMessageID < 0 {
@@ -287,6 +287,39 @@ ON CONFLICT(tg_account_id, chat_id) DO UPDATE SET
   last_downloaded_message_id=excluded.last_downloaded_message_id,
   updated_at=excluded.updated_at`,
 		accountID, chatID, lastMessageID, now)
+	return err
+}
+
+// GetChannelBatchSize 返回该频道已保存的每批条数；未设置时返回 0。
+func (d *DB) GetChannelBatchSize(ctx context.Context, accountID, chatID int64) (int, error) {
+	var n sql.NullInt64
+	err := d.SQL.QueryRowContext(ctx, `
+SELECT batch_size FROM chat_download_state WHERE tg_account_id=? AND chat_id=?`, accountID, chatID).Scan(&n)
+	if err == sql.ErrNoRows {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	if !n.Valid || n.Int64 <= 0 {
+		return 0, nil
+	}
+	return int(n.Int64), nil
+}
+
+// SetChannelBatchSize 保存频道每批条数（成功下载后记忆）。
+func (d *DB) SetChannelBatchSize(ctx context.Context, accountID, chatID int64, batchSize int) error {
+	if batchSize <= 0 {
+		return nil
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	_, err := d.SQL.ExecContext(ctx, `
+INSERT INTO chat_download_state (tg_account_id, chat_id, last_downloaded_message_id, batch_size, updated_at)
+VALUES (?, ?, 0, ?, ?)
+ON CONFLICT(tg_account_id, chat_id) DO UPDATE SET
+  batch_size=excluded.batch_size,
+  updated_at=excluded.updated_at`,
+		accountID, chatID, batchSize, now)
 	return err
 }
 

@@ -28,10 +28,11 @@ type ChatDownloadParams struct {
 	ChatTitle      string
 	FromMessageID  int    // chat_batch：起始 message id（含）
 	Count          int    // chat_batch：连续 message id 数量
-	Mode           string // "batch" | "continue"
+	Mode           string // "batch" | "continue" | "ids"
 	AfterMessageID int    // chat_continue：已下载最大 id（不含）
 	LastMessageID  int    // chat_continue：对话最新 id，0 表示未知
 	MaxMedia       int    // continue 单次上限，默认 5000
+	MessageIDs     []int  // mode=ids：仅下载这些消息
 	GroupAlbum     bool
 }
 
@@ -60,7 +61,7 @@ func (m *Manager) DownloadChat(ctx context.Context, opt DownloadOptions, p ChatD
 		opt.Template = DefaultFileTemplate
 	}
 	if p.MaxMedia <= 0 {
-		p.MaxMedia = 500
+		p.MaxMedia = 100
 	}
 	if p.Mode == "batch" {
 		if p.FromMessageID <= 0 {
@@ -212,6 +213,40 @@ func collectChatMedia(ctx context.Context, api *tg.Client, peer peers.Peer, p Ch
 	scanEnd := 0
 
 	switch p.Mode {
+	case "ids":
+		for _, mid := range p.MessageIDs {
+			if mid <= 0 {
+				continue
+			}
+			if _, ok := seen[mid]; ok {
+				continue
+			}
+			msg, err := tutil.GetSingleMessage(ctx, api, input, mid)
+			if err != nil {
+				slog.Warn("retry fetch message", "chat", peer.ID(), "msg", mid, "err", err)
+				continue
+			}
+			seen[mid] = struct{}{}
+			out = append(out, msg)
+			if p.GroupAlbum {
+				gctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+				grouped, gerr := tutil.GetGroupedMessages(gctx, api, input, msg)
+				cancel()
+				if gerr == nil {
+					for _, gm := range grouped {
+						if gm == nil || gm.ID == msg.ID {
+							continue
+						}
+						if _, ok := seen[gm.ID]; ok {
+							continue
+						}
+						seen[gm.ID] = struct{}{}
+						out = append(out, gm)
+					}
+				}
+			}
+		}
+		return out, 0, nil
 	case "batch":
 		from := p.FromMessageID
 		to := from + p.Count - 1
@@ -225,7 +260,7 @@ func collectChatMedia(ctx context.Context, api *tg.Client, peer peers.Peer, p Ch
 		after := p.AfterMessageID
 		maxMedia := p.MaxMedia
 		if maxMedia <= 0 {
-			maxMedia = 500
+			maxMedia = 100
 		}
 		latest := p.LastMessageID
 		from := after + 1

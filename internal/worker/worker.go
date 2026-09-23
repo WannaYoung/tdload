@@ -98,8 +98,23 @@ func (w *Worker) Pause(id int64) {
 		cancel()
 	}
 	w.mu.Unlock()
+	kind := ""
+	if task, err := w.DB.GetTask(context.Background(), id); err == nil && task != nil {
+		kind = taskKind(task.Source)
+	}
 	_ = w.DB.UpdateTaskStatus(context.Background(), id, "paused", "用户暂停")
-	w.Hub.Publish(progress.Event{TaskID: id, Status: "paused", Phase: "paused"})
+	w.Hub.Publish(progress.Event{Type: "task_progress", Kind: kind, TaskID: id, Status: "paused", Phase: "paused"})
+}
+
+func taskKind(source string) string {
+	switch source {
+	case "saved_all", "watch_saved":
+		return "saved"
+	case "chat_continue", "chat_batch", "chat_range", "watch":
+		return "channel"
+	default:
+		return "message"
+	}
 }
 
 func (w *Worker) loop(ctx context.Context) {
@@ -139,8 +154,9 @@ func (w *Worker) runOne(parent context.Context, id int64) {
 	_ = w.DB.UpdateTaskStatus(ctx, id, "running", "")
 	_ = w.DB.AddTaskLog(ctx, id, "info", "开始下载")
 	slog.Info("task start", "id", id, "urls", task.URLs)
+	kind := taskKind(task.Source)
 	w.Hub.Publish(progress.Event{
-		TaskID: id, Phase: "running", Status: "running",
+		Type: "task_progress", Kind: kind, TaskID: id, Phase: "running", Status: "running",
 		Done: task.DoneFiles, Total: task.TotalFiles, Title: task.Title,
 	})
 
@@ -169,7 +185,7 @@ func (w *Worker) runOne(parent context.Context, id int64) {
 			}
 		}
 		rows.Close()
-		opt := w.downloadOpts(id, tg.FavoritesFolderName)
+		opt := w.downloadOpts(id, tg.FavoritesFolderName, "saved")
 		baseOnItem := opt.OnItem
 		opt.OnItem = func(chatID int64, messageID int, status, fileName, localPath, errMsg string) {
 			if baseOnItem != nil {
@@ -186,7 +202,7 @@ func (w *Worker) runOne(parent context.Context, id int64) {
 	case "watch_saved":
 		err = w.runWatchSavedTask(ctx, task)
 	default:
-		opt := w.downloadOpts(id, "")
+		opt := w.downloadOpts(id, "", "message")
 		opt.URLs = task.URLs
 		opt.OnProgress = func(doneFiles, totalFiles int, fileName string) {
 			bg := context.Background()
@@ -195,11 +211,11 @@ func (w *Worker) runOne(parent context.Context, id int64) {
 				_ = w.DB.AddTaskLog(bg, id, "info", fileName)
 			}
 			w.Hub.Publish(progress.Event{
-				Type: "task_item_progress", TaskID: id, Phase: "downloading", Status: "running",
+				Type: "task_item_progress", Kind: "message", TaskID: id, Phase: "downloading", Status: "running",
 				Done: doneFiles, Total: totalFiles, Title: fileName,
 			})
 			w.Hub.Publish(progress.Event{
-				Type: "task_progress", TaskID: id, Phase: "downloading", Status: "running",
+				Type: "task_progress", Kind: "message", TaskID: id, Phase: "downloading", Status: "running",
 				Done: doneFiles, Total: totalFiles, Title: fileName,
 			})
 		}
@@ -214,12 +230,12 @@ func (w *Worker) runOne(parent context.Context, id int64) {
 				return
 			}
 			_ = w.DB.UpdateTaskStatus(context.Background(), id, "queued", "中断，待重试")
-			w.Hub.Publish(progress.Event{TaskID: id, Status: "queued", Phase: "queued", Error: "interrupted"})
+			w.Hub.Publish(progress.Event{Type: "task_progress", Kind: kind, TaskID: id, Status: "queued", Phase: "queued", Error: "interrupted"})
 			return
 		}
 		_ = w.DB.UpdateTaskStatus(context.Background(), id, "failed", err.Error())
 		_ = w.DB.AddTaskLog(context.Background(), id, "error", err.Error())
-		w.Hub.Publish(progress.Event{TaskID: id, Status: "failed", Phase: "failed", Error: err.Error()})
+		w.Hub.Publish(progress.Event{Type: "task_progress", Kind: kind, TaskID: id, Status: "failed", Phase: "failed", Error: err.Error()})
 		slog.Error("task failed", "id", id, "err", err)
 		return
 	}
@@ -229,8 +245,8 @@ func (w *Worker) runOne(parent context.Context, id int64) {
 	if final != nil {
 		doneFiles, totalFiles = final.DoneFiles, final.TotalFiles
 	}
-	// 频道任务可能仅跳过/无新媒体，以 item 计数为准
-	if task.Source == "chat_batch" || task.Source == "chat_continue" || task.Source == "chat_range" || task.Source == "watch" || task.Source == "watch_saved" {
+	// 频道 / 收藏监听任务可能仅跳过/无新媒体，以 item 计数为准
+	if task.Source == "chat_batch" || task.Source == "chat_continue" || task.Source == "chat_range" || task.Source == "watch" || task.Source == "watch_saved" || task.Source == "saved_all" {
 		if counts, e := w.DB.TaskItemCounts(context.Background(), id); e == nil {
 			totalFiles = counts.Pending + counts.Downloading + counts.Done + counts.Skipped + counts.Failed
 			doneFiles = counts.Done + counts.Skipped
@@ -239,7 +255,7 @@ func (w *Worker) runOne(parent context.Context, id int64) {
 		if totalFiles == 0 {
 			_ = w.DB.UpdateTaskStatus(context.Background(), id, "done", "没有需要下载的媒体")
 			_ = w.DB.AddTaskLog(context.Background(), id, "info", "没有需要下载的媒体")
-			w.Hub.Publish(progress.Event{Type: "task_progress", Kind: "channel", TaskID: id, Status: "done", Phase: "done", Done: 0, Total: 0})
+			w.Hub.Publish(progress.Event{Type: "task_progress", Kind: kind, TaskID: id, Status: "done", Phase: "done", Done: 0, Total: 0})
 			slog.Info("task done (empty)", "id", id)
 			return
 		}
@@ -250,7 +266,7 @@ func (w *Worker) runOne(parent context.Context, id int64) {
 			}
 			_ = w.DB.UpdateTaskStatus(context.Background(), id, "failed", msg)
 			_ = w.DB.AddTaskLog(context.Background(), id, "error", msg)
-			w.Hub.Publish(progress.Event{Type: "task_progress", Kind: "channel", TaskID: id, Status: "failed", Phase: "failed", Error: msg, Done: 0, Total: totalFiles})
+			w.Hub.Publish(progress.Event{Type: "task_progress", Kind: kind, TaskID: id, Status: "failed", Phase: "failed", Error: msg, Done: 0, Total: totalFiles})
 			slog.Error("task failed", "id", id, "err", msg)
 			return
 		}
@@ -258,12 +274,12 @@ func (w *Worker) runOne(parent context.Context, id int64) {
 		msg := "未写入任何文件"
 		_ = w.DB.UpdateTaskStatus(context.Background(), id, "failed", msg)
 		_ = w.DB.AddTaskLog(context.Background(), id, "error", msg)
-		w.Hub.Publish(progress.Event{TaskID: id, Status: "failed", Phase: "failed", Error: msg})
+		w.Hub.Publish(progress.Event{Type: "task_progress", Kind: kind, TaskID: id, Status: "failed", Phase: "failed", Error: msg})
 		slog.Error("task failed", "id", id, "err", msg)
 		return
 	}
 	_ = w.DB.UpdateTaskStatus(context.Background(), id, "done", "")
 	_ = w.DB.AddTaskLog(context.Background(), id, "info", "完成")
-	w.Hub.Publish(progress.Event{TaskID: id, Status: "done", Phase: "done", Done: doneFiles, Total: totalFiles})
+	w.Hub.Publish(progress.Event{Type: "task_progress", Kind: kind, TaskID: id, Status: "done", Phase: "done", Done: doneFiles, Total: totalFiles})
 	slog.Info("task done", "id", id)
 }

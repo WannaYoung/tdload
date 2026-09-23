@@ -169,7 +169,30 @@ CREATE TABLE IF NOT EXISTS chat_download_state (
 	if err != nil {
 		return err
 	}
-	return d.ensureWatchColumns()
+	if err := d.ensureWatchColumns(); err != nil {
+		return err
+	}
+	return d.ensureChatDownloadStateColumns()
+}
+
+func (d *DB) ensureChatDownloadStateColumns() error {
+	cols := []struct{ name, ddl string }{
+		{"batch_size", `ALTER TABLE chat_download_state ADD COLUMN batch_size INTEGER NOT NULL DEFAULT 0`},
+	}
+	for _, c := range cols {
+		var n int
+		err := d.SQL.QueryRow(`SELECT COUNT(1) FROM pragma_table_info('chat_download_state') WHERE name=?`, c.name).Scan(&n)
+		if err != nil {
+			return err
+		}
+		if n > 0 {
+			continue
+		}
+		if _, err := d.SQL.Exec(c.ddl); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (d *DB) ensureWatchColumns() error {
@@ -258,6 +281,18 @@ FROM tasks`).Scan(&queued, &running, &failed, &paused, &done)
 		return
 	}
 	err = d.SQL.QueryRowContext(ctx, `SELECT COUNT(1) FROM media_index`).Scan(&media)
+	return
+}
+
+// DashboardActiveByKind 返回各业务线排队+下载中任务数（不含 paused）。
+func (d *DB) DashboardActiveByKind(ctx context.Context) (message, saved, channel int, err error) {
+	err = d.SQL.QueryRowContext(ctx, `
+SELECT
+  COALESCE(SUM(CASE WHEN source='url' THEN 1 ELSE 0 END), 0),
+  COALESCE(SUM(CASE WHEN source IN ('saved_all','watch_saved') THEN 1 ELSE 0 END), 0),
+  COALESCE(SUM(CASE WHEN source IN ('chat_continue','chat_batch','chat_range','watch') THEN 1 ELSE 0 END), 0)
+FROM tasks
+WHERE status IN ('queued','running')`).Scan(&message, &saved, &channel)
 	return
 }
 

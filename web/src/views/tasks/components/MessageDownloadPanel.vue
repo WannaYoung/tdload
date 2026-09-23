@@ -96,8 +96,8 @@ function renderMediaKind(kind?: string) {
   );
 }
 
-async function load() {
-  loading.value = true;
+async function load(silent = false) {
+  if (!silent) loading.value = true;
   try {
     const data = await api<{ items: TaskItemRow[]; total: number; doneCount: number }>(
       `/api/tasks/items?kind=message&page=${page.value}&pageSize=${pageSize}`,
@@ -106,10 +106,35 @@ async function load() {
     total.value = data.total || 0;
     doneCount.value = data.doneCount || 0;
   } catch (e) {
-    message.error(e instanceof Error ? e.message : "加载失败");
+    if (!silent) message.error(e instanceof Error ? e.message : "加载失败");
   } finally {
-    loading.value = false;
+    if (!silent) loading.value = false;
   }
+}
+
+/** 就地更新单条消息项状态，避免整表刷新 */
+function applyItemProgress(ev: {
+  kind?: string;
+  taskId?: number;
+  chatId?: number;
+  messageId?: number;
+  status?: string;
+  title?: string;
+}) {
+  if (ev.kind && ev.kind !== "message") return false;
+  if (ev.messageId == null || ev.messageId <= 0) return false;
+  const idx = items.value.findIndex(
+    (it) =>
+      it.messageId === ev.messageId &&
+      (ev.chatId == null || ev.chatId === 0 || it.chatId === ev.chatId) &&
+      (ev.taskId == null || it.taskId === ev.taskId),
+  );
+  if (idx < 0) return false;
+  const row = { ...items.value[idx] };
+  if (ev.status) row.status = ev.status;
+  if (ev.title) row.fileName = ev.title;
+  items.value.splice(idx, 1, row);
+  return true;
 }
 
 async function deleteItem(id: number) {
@@ -205,7 +230,11 @@ watch(
   { immediate: true },
 );
 
-defineExpose({ reload: load, loading });
+defineExpose({
+  reload: (silent?: boolean) => load(!!silent),
+  loading,
+  applyItemProgress,
+});
 </script>
 
 <template>
@@ -236,16 +265,18 @@ defineExpose({ reload: load, loading });
       </n-button>
     </div>
     <div class="table-wrap message-table">
-      <n-empty v-if="!items.length && !loading" description="暂无消息项" />
       <n-data-table
-        v-else
-        flex-height
         :columns="columns"
         :data="items"
         :bordered="false"
         size="small"
+        :loading="loading"
         :row-key="(r: TaskItemRow) => r.id"
-      />
+      >
+        <template #empty>
+          <n-empty description="暂无消息项" />
+        </template>
+      </n-data-table>
     </div>
     <div v-if="total > pageSize" class="pager">
       <n-button size="small" :disabled="page <= 1" @click="page--; load()">上一页</n-button>
@@ -257,7 +288,12 @@ defineExpose({ reload: load, loading });
 
 <style scoped>
 .panel {
-  display: contents;
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
+  gap: 12px;
 }
 .composer {
   display: flex;
@@ -283,13 +319,9 @@ defineExpose({ reload: load, loading });
   color: rgba(255, 255, 255, 0.55);
 }
 .message-table {
-  overflow: hidden;
-}
-.message-table :deep(.n-data-table) {
-  height: 100%;
-}
-.message-table :deep(.n-data-table-base-table) {
-  height: 100%;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
 }
 .pager {
   flex-shrink: 0;
