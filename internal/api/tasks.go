@@ -11,17 +11,20 @@ import (
 
 	"tdload/internal/auth"
 	"tdload/internal/db"
+	"tdload/internal/tg"
 )
 
 func (s *Server) handleCreateTasks(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Source          string `json:"source"`
-		URLs            []string `json:"urls"`
-		Text            string   `json:"text"`
-		Title           string   `json:"title"`
-		ChatID          int64    `json:"chatId"`
-		FromMessageID   int      `json:"fromMessageId"`
-		Count           int      `json:"count"`
+		Source        string   `json:"source"`
+		URLs          []string `json:"urls"`
+		Text          string   `json:"text"`
+		Title         string   `json:"title"`
+		ChatID        int64    `json:"chatId"`
+		Chat          string   `json:"chat"`
+		Username      string   `json:"username"`
+		FromMessageID int      `json:"fromMessageId"`
+		Count         int      `json:"count"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeErr(w, http.StatusBadRequest, "无效请求体")
@@ -53,53 +56,144 @@ func (s *Server) handleCreateTasks(w http.ResponseWriter, r *http.Request) {
 		}
 		writeOK(w, taskViewEnriched(s, r, task))
 		return
-	case "chat_batch", "chat_continue":
+	case "chat_batch":
+		chatID, username, errMsg := parseChannelRef(body.ChatID, body.Chat, body.Username)
+		if errMsg != "" {
+			writeErr(w, http.StatusBadRequest, errMsg)
+			return
+		}
+		if body.FromMessageID <= 0 {
+			writeErr(w, http.StatusBadRequest, "请填写起始消息 ID")
+			return
+		}
+		if body.Count <= 0 {
+			body.Count = 100
+		}
+		if body.Count < 50 {
+			body.Count = 50
+		}
+		if body.Count > 5000 {
+			body.Count = 5000
+		}
+		chatTitle := ""
+		// 尽量解析真实名称（公开频道 / 已加入均可）
+		if s.TG != nil {
+			if info, err := s.TG.ResolveChatInfo(r.Context(), chatID, username); err == nil && info != nil {
+				chatID = info.ChatID
+				if info.Username != "" {
+					username = info.Username
+				}
+				chatTitle = info.Title
+				_ = s.DB.UpsertChatLabel(r.Context(), info.ChatID, info.Title, info.Username)
+			}
+		}
+		if chatTitle == "" {
+			if d, _ := s.DB.GetTGDialog(r.Context(), db.DefaultTGAccountID, chatID); d != nil {
+				chatTitle = d.Title
+				if chatTitle == "" {
+					chatTitle = d.Username
+				}
+				if username == "" {
+					username = d.Username
+				}
+			}
+		}
+		if chatTitle == "" {
+			if label, uname, ok := s.DB.GetChatLabel(r.Context(), chatID); ok {
+				chatTitle = label
+				if username == "" {
+					username = uname
+				}
+			}
+		}
+		if chatTitle == "" && username != "" {
+			chatTitle = "@" + username
+		}
+		if chatTitle == "" {
+			chatTitle = fmt.Sprintf("%d", chatID)
+		}
+		// 仅与同 chatId 的任务页频道下载互斥；不要求已同步、不写频道水位 / batch_size
+		if chatID != 0 {
+			if ok, id, _ := s.DB.HasActiveChatBatchTask(r.Context(), chatID); ok {
+				writeErr(w, http.StatusConflict, fmt.Sprintf("该频道已有进行中的下载任务 #%d", id))
+				return
+			}
+			if alt := tg.NormalizeChannelChatID(chatID); alt != chatID {
+				if ok, id, _ := s.DB.HasActiveChatBatchTask(r.Context(), alt); ok {
+					writeErr(w, http.StatusConflict, fmt.Sprintf("该频道已有进行中的下载任务 #%d", id))
+					return
+				}
+			}
+		}
+		optMap := map[string]any{
+			"chatId": chatID, "fromMessageId": body.FromMessageID, "count": body.Count,
+			"chatTitle": chatTitle,
+		}
+		if username != "" {
+			optMap["username"] = username
+		}
+		opt, _ := json.Marshal(optMap)
+		title := body.Title
+		if title == "" {
+			title = fmt.Sprintf("%s · #%d–#%d", chatTitle, body.FromMessageID, body.FromMessageID+body.Count-1)
+		}
+		task, err := s.DB.CreateTask(r.Context(), "chat_batch", title, string(opt), body.Count)
+		if err != nil {
+			writeErr(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		if s.Worker != nil {
+			s.Worker.Enqueue(task.ID)
+		}
+		writeOK(w, taskViewEnriched(s, r, task))
+		return
+	case "chat_continue":
 		if body.ChatID == 0 {
 			writeErr(w, http.StatusBadRequest, "请选择频道")
+			return
+		}
+		d, _ := s.DB.GetTGDialog(r.Context(), db.DefaultTGAccountID, body.ChatID)
+		if d == nil {
+			writeErr(w, http.StatusNotFound, "频道不存在，请先在 Telegram 页同步对话")
 			return
 		}
 		if ok, id, _ := s.DB.HasActiveChannelTask(r.Context(), body.ChatID); ok {
 			writeErr(w, http.StatusConflict, fmt.Sprintf("该频道已有进行中的下载任务 #%d", id))
 			return
 		}
-		if source == "chat_batch" {
-			if body.FromMessageID <= 0 {
-				writeErr(w, http.StatusBadRequest, "请填写起始 message id")
-				return
-			}
-			if body.Count <= 0 {
-				body.Count = 50
+		if body.Count <= 0 {
+			if n, _ := s.DB.GetChannelBatchSize(r.Context(), db.DefaultTGAccountID, body.ChatID); n > 0 {
+				body.Count = n
+			} else {
+				body.Count = 100
 			}
 		}
-		if source == "chat_continue" && body.Count <= 0 {
-			body.Count = 100
+		if body.Count < 50 {
+			body.Count = 50
+		}
+		if body.Count > 5000 {
+			body.Count = 5000
 		}
 		opt, _ := json.Marshal(map[string]any{
 			"chatId": body.ChatID, "fromMessageId": body.FromMessageID, "count": body.Count,
 		})
 		title := body.Title
 		if title == "" {
-			if d, _ := s.DB.GetTGDialog(r.Context(), db.DefaultTGAccountID, body.ChatID); d != nil && d.Title != "" {
-				if source == "chat_continue" {
-					title = d.Title + " · 续下"
-				} else {
-					title = fmt.Sprintf("%s · #%d×%d", d.Title, body.FromMessageID, body.Count)
-				}
-			} else if source == "chat_continue" {
-				title = "频道续下"
-			} else {
-				title = "频道批量"
+			name := d.Title
+			if name == "" {
+				name = d.Username
 			}
+			if name == "" {
+				name = fmt.Sprintf("%d", body.ChatID)
+			}
+			title = name + " · 续下"
 		}
-		totalHint := body.Count
-		if source == "chat_continue" {
-			totalHint = 0
-		}
-		task, err := s.DB.CreateTask(r.Context(), source, title, string(opt), totalHint)
+		task, err := s.DB.CreateTask(r.Context(), "chat_continue", title, string(opt), 0)
 		if err != nil {
 			writeErr(w, http.StatusInternalServerError, err.Error())
 			return
 		}
+		_ = s.DB.SetChannelBatchSize(r.Context(), db.DefaultTGAccountID, body.ChatID, body.Count)
 		if s.Worker != nil {
 			s.Worker.Enqueue(task.ID)
 		}
@@ -314,6 +408,27 @@ func filterTGURLs(in []string) []string {
 		out = append(out, u)
 	}
 	return out
+}
+
+// parseChannelRef 解析频道引用：支持 chatId、@username，或 chat 字段（数字 / 用户名）。
+func parseChannelRef(chatID int64, chat, username string) (int64, string, string) {
+	username = strings.TrimPrefix(strings.TrimSpace(username), "@")
+	chat = strings.TrimSpace(chat)
+	if chat != "" {
+		raw := strings.TrimPrefix(chat, "@")
+		if n, err := strconv.ParseInt(raw, 10, 64); err == nil && n != 0 {
+			chatID = n
+		} else if raw != "" {
+			username = raw
+		}
+	}
+	if chatID == 0 && username == "" {
+		return 0, "", "请填写频道 ID 或 @用户名"
+	}
+	if chatID > 0 {
+		chatID = tg.NormalizeChannelChatID(chatID)
+	}
+	return chatID, username, ""
 }
 
 func pathID(r *http.Request, key string) (int64, error) {

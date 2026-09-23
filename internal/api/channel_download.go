@@ -75,6 +75,8 @@ func (s *Server) handleChannelDownload(w http.ResponseWriter, r *http.Request) {
 		"failedCount":       failedCount,
 		"status":            status,
 		"syncedAt":          d.SyncedAt,
+		"isCustom":          d.IsCustom,
+		"custom":            d.IsCustom,
 		"activeTask":        activeView,
 		"recentBatches":     historyViews,
 		"defaultBatchSize":  batchSize,
@@ -92,7 +94,14 @@ func (s *Server) handleChannelContinue(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = jsonDecodeOptional(r, &body)
 	if body.Count <= 0 {
-		body.Count = 100
+		if n, _ := s.DB.GetChannelBatchSize(r.Context(), db.DefaultTGAccountID, chatID); n > 0 {
+			body.Count = n
+		} else {
+			body.Count = 100
+		}
+	}
+	if body.Count < 50 {
+		body.Count = 50
 	}
 	if body.Count > 5000 {
 		body.Count = 5000
@@ -126,6 +135,7 @@ func (s *Server) handleChannelContinue(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	_ = s.DB.SetChannelBatchSize(r.Context(), db.DefaultTGAccountID, chatID, body.Count)
 	if s.Worker != nil {
 		s.Worker.Enqueue(task.ID)
 	}
@@ -192,4 +202,18 @@ func (s *Server) handleChannelScanCursor(w http.ResponseWriter, r *http.Request)
 		"lastMessageId":     d.LastMessageID,
 		"caughtUp":          caughtUp,
 	})
+}
+
+func (s *Server) handleClearChannelCompletedBatches(w http.ResponseWriter, r *http.Request) {
+	chatID, err := pathID(r, "chatId")
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "无效 chatId")
+		return
+	}
+	n, err := s.DB.ClearCompletedChannelTasksForChat(r.Context(), chatID)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeOK(w, map[string]any{"ok": true, "cleared": n})
 }

@@ -20,27 +20,38 @@ func (s *Server) handleListWatch(w http.ResponseWriter, r *http.Request) {
 	views := make([]map[string]any, 0, len(items))
 	for _, it := range items {
 		isFav := favID > 0 && it.ChatID == favID
+		d, _ := s.DB.GetTGDialog(r.Context(), db.DefaultTGAccountID, it.ChatID)
+		isCustom := !isFav && d != nil && d.IsCustom
 		title := it.ChatTitle
 		if isFav {
 			title = "我的收藏"
-		} else if title == "" {
-			if d, _ := s.DB.GetTGDialog(r.Context(), db.DefaultTGAccountID, it.ChatID); d != nil {
-				title = d.Title
-			}
+		} else if title == "" && d != nil {
+			title = d.Title
 		}
 		downloaded, _ := s.DB.MediaCountForChat(r.Context(), it.ChatID)
 		latest := 0
 		if isFav {
 			latest, _ = s.DB.MaxSavedMessageID(r.Context(), db.DefaultTGAccountID)
-		} else if d, _ := s.DB.GetTGDialog(r.Context(), db.DefaultTGAccountID, it.ChatID); d != nil {
+		} else if d != nil {
 			latest = d.LastMessageID
+		}
+		kind := ""
+		if isFav {
+			kind = "saved"
+		} else if isCustom {
+			kind = "custom"
+		} else if d != nil {
+			kind = d.Kind
 		}
 		views = append(views, map[string]any{
 			"id":              it.ID,
 			"chatId":          it.ChatID,
 			"chatTitle":       title,
+			"kind":            kind,
 			"isFavorites":     isFav,
+			"isCustom":        isCustom,
 			"enabled":         it.Enabled,
+			"contentType":     parseWatchContentType(it.FilterJSON),
 			"lastMessageId":   latest,
 			"cursorMessageId": it.LastMessageID,
 			"downloadedCount": downloaded,
@@ -77,6 +88,7 @@ func (s *Server) handleWatchCandidates(w http.ResponseWriter, r *http.Request) {
 		Title    string `json:"title"`
 		Kind     string `json:"kind"`
 		Username string `json:"username"`
+		IsCustom bool   `json:"isCustom"`
 	}
 	out := make([]opt, 0)
 	if favID > 0 {
@@ -100,19 +112,25 @@ func (s *Server) handleWatchCandidates(w http.ResponseWriter, r *http.Request) {
 		if title == "" {
 			title = formatInt64(d.ChatID)
 		}
-		out = append(out, opt{ChatID: d.ChatID, Title: title, Kind: d.Kind, Username: d.Username})
+		kind := d.Kind
+		if d.IsCustom {
+			kind = "custom"
+		}
+		out = append(out, opt{ChatID: d.ChatID, Title: title, Kind: kind, Username: d.Username, IsCustom: d.IsCustom})
 	}
 	writeOK(w, map[string]any{"items": out, "favoritesChatId": favID})
 }
 
 func (s *Server) handleCreateWatch(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		ChatID int64 `json:"chatId"`
+		ChatID      int64  `json:"chatId"`
+		ContentType string `json:"contentType"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.ChatID == 0 {
 		writeErr(w, http.StatusBadRequest, "请选择频道")
 		return
 	}
+	contentType := tg.NormalizeContentType(body.ContentType)
 	if existing, _ := s.DB.GetWatchedByChatID(r.Context(), db.DefaultTGAccountID, body.ChatID); existing != nil {
 		writeErr(w, http.StatusConflict, "该频道已在监听列表中")
 		return
@@ -154,11 +172,36 @@ func (s *Server) handleCreateWatch(w http.ResponseWriter, r *http.Request) {
 			title = formatInt64(body.ChatID)
 		}
 		latest = d.LastMessageID
+		if s.TG != nil {
+			info, lastID, err := s.TG.FetchChatSnapshot(r.Context(), d.ChatID, d.Username)
+			if err != nil {
+				writeErr(w, http.StatusBadRequest, err.Error())
+				return
+			}
+			if info != nil {
+				if info.Title != "" {
+					title = info.Title
+				}
+				uname := info.Username
+				if uname == "" {
+					uname = d.Username
+				}
+				if lastID <= 0 {
+					lastID = latest
+				}
+				if err := s.DB.UpdateDialogMeta(r.Context(), db.DefaultTGAccountID, d.ChatID, title, uname, lastID); err != nil {
+					writeErr(w, http.StatusInternalServerError, err.Error())
+					return
+				}
+				latest = lastID
+			}
+		}
 	}
 
 	interval := time.Duration(s.Cfg.ClampWatchInterval()) * time.Minute
 	nextRun := time.Now().UTC().Add(interval).Format(time.RFC3339)
-	row, err := s.DB.InsertWatchedChat(r.Context(), db.DefaultTGAccountID, body.ChatID, title, latest, nextRun, "{}")
+	filterJSON, _ := json.Marshal(map[string]string{"contentType": contentType})
+	row, err := s.DB.InsertWatchedChat(r.Context(), db.DefaultTGAccountID, body.ChatID, title, latest, nextRun, string(filterJSON))
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
@@ -169,6 +212,7 @@ func (s *Server) handleCreateWatch(w http.ResponseWriter, r *http.Request) {
 		"chatId":          row.ChatID,
 		"chatTitle":       title,
 		"isFavorites":     isFav,
+		"contentType":     contentType,
 		"lastMessageId":   latest,
 		"downloadedCount": downloaded,
 		"nextRunAt":       nextRun,
@@ -203,6 +247,14 @@ func (s *Server) favoritesChatID(r *http.Request) int64 {
 		}
 	}
 	return 0
+}
+
+func parseWatchContentType(filterJSON string) string {
+	var f struct {
+		ContentType string `json:"contentType"`
+	}
+	_ = json.Unmarshal([]byte(filterJSON), &f)
+	return tg.NormalizeContentType(f.ContentType)
 }
 
 func formatInt64(n int64) string {

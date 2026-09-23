@@ -23,18 +23,28 @@ import (
 type DownloadProgress func(doneFiles, totalFiles int, fileName string)
 
 type DownloadOptions struct {
-	URLs       []string
-	OutDir     string
-	OutSubdir  string
-	Threads    int
-	Template   string
-	GroupAlbum bool
-	SkipSame   bool
-	RewriteExt bool
-	OnProgress DownloadProgress
-	Exists     func(chatID int64, messageID int, size int64) (bool, string, error)
-	OnFile     func(chatID int64, messageID int, fileName string, size int64, path, mime string) error
-	OnItem     func(chatID int64, messageID int, status, fileName, localPath, errMsg string)
+	URLs        []string
+	OutDir      string
+	OutSubdir   string
+	Threads     int
+	Template    string
+	GroupAlbum  bool
+	SkipSame    bool
+	RewriteExt  bool
+	ContentType string // all|media|image|video，空视为 all
+	OnProgress  DownloadProgress
+	Exists      func(chatID int64, messageID int, size int64) (bool, string, error)
+	OnFile      func(chatID int64, messageID int, fileName string, size int64, path, mime string) error
+	OnItem      func(chatID int64, messageID int, status, fileName, localPath, errMsg string)
+	OnResolved  func(info ChatInfo) // 解析到真实频道后回调
+}
+
+// ChatInfo 解析后的频道/群信息。
+type ChatInfo struct {
+	ChatID   int64
+	Title    string
+	Username string
+	Kind     string // channel | group
 }
 
 // DefaultFileTemplate 默认文件名模板（占位符 {{Field}}，无 Go 模板点号）。

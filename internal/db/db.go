@@ -146,6 +146,7 @@ CREATE TABLE IF NOT EXISTS tg_dialogs (
   downloaded_count INTEGER NOT NULL DEFAULT 0,
   last_message_id INTEGER NOT NULL DEFAULT 0,
   synced_at TEXT NOT NULL,
+  is_custom INTEGER NOT NULL DEFAULT 0,
   UNIQUE(tg_account_id, chat_id)
 );
 
@@ -165,6 +166,13 @@ CREATE TABLE IF NOT EXISTS chat_download_state (
   updated_at TEXT NOT NULL,
   PRIMARY KEY (tg_account_id, chat_id)
 );
+
+CREATE TABLE IF NOT EXISTS chat_labels (
+  chat_id INTEGER PRIMARY KEY,
+  title TEXT NOT NULL DEFAULT '',
+  username TEXT NOT NULL DEFAULT '',
+  updated_at TEXT NOT NULL
+);
 `)
 	if err != nil {
 		return err
@@ -172,7 +180,30 @@ CREATE TABLE IF NOT EXISTS chat_download_state (
 	if err := d.ensureWatchColumns(); err != nil {
 		return err
 	}
-	return d.ensureChatDownloadStateColumns()
+	if err := d.ensureChatDownloadStateColumns(); err != nil {
+		return err
+	}
+	return d.ensureTGDialogsColumns()
+}
+
+func (d *DB) ensureTGDialogsColumns() error {
+	cols := []struct{ name, ddl string }{
+		{"is_custom", `ALTER TABLE tg_dialogs ADD COLUMN is_custom INTEGER NOT NULL DEFAULT 0`},
+	}
+	for _, c := range cols {
+		var n int
+		err := d.SQL.QueryRow(`SELECT COUNT(1) FROM pragma_table_info('tg_dialogs') WHERE name=?`, c.name).Scan(&n)
+		if err != nil {
+			return err
+		}
+		if n > 0 {
+			continue
+		}
+		if _, err := d.SQL.Exec(c.ddl); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (d *DB) ensureChatDownloadStateColumns() error {
@@ -285,12 +316,13 @@ FROM tasks`).Scan(&queued, &running, &failed, &paused, &done)
 }
 
 // DashboardActiveByKind 返回各业务线排队+下载中任务数（不含 paused）。
+// message：消息链接 + 任务页频道下载；channel：频道页续下 / 监听。
 func (d *DB) DashboardActiveByKind(ctx context.Context) (message, saved, channel int, err error) {
 	err = d.SQL.QueryRowContext(ctx, `
 SELECT
-  COALESCE(SUM(CASE WHEN source='url' THEN 1 ELSE 0 END), 0),
+  COALESCE(SUM(CASE WHEN source IN ('url','chat_batch') THEN 1 ELSE 0 END), 0),
   COALESCE(SUM(CASE WHEN source IN ('saved_all','watch_saved') THEN 1 ELSE 0 END), 0),
-  COALESCE(SUM(CASE WHEN source IN ('chat_continue','chat_batch','chat_range','watch') THEN 1 ELSE 0 END), 0)
+  COALESCE(SUM(CASE WHEN source IN ('chat_continue','chat_range','watch') THEN 1 ELSE 0 END), 0)
 FROM tasks
 WHERE status IN ('queued','running')`).Scan(&message, &saved, &channel)
 	return

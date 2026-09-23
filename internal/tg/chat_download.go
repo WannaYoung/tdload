@@ -18,6 +18,7 @@ import (
 	"github.com/gotd/td/telegram/query/dialogs"
 	"github.com/gotd/td/telegram/query/messages"
 	"github.com/gotd/td/tg"
+	"github.com/gotd/td/tgerr"
 	"github.com/iyear/tdl/core/util/tutil"
 )
 
@@ -39,8 +40,8 @@ type ChatDownloadParams struct {
 // DownloadChat 按 chat_batch / chat_continue 扫描历史并下载媒体。
 // 返回 scanEnd：本批应推进的扫描水位；0 表示无推进。
 func (m *Manager) DownloadChat(ctx context.Context, opt DownloadOptions, p ChatDownloadParams) (int, error) {
-	if p.ChatID == 0 {
-		return 0, fmt.Errorf("缺少 chat_id")
+	if p.ChatID == 0 && strings.TrimSpace(p.Username) == "" {
+		return 0, fmt.Errorf("缺少 chat_id 或用户名")
 	}
 	if opt.OutDir == "" {
 		opt.OutDir = m.Cfg.DownloadDir
@@ -78,19 +79,23 @@ func (m *Manager) DownloadChat(ctx context.Context, opt DownloadOptions, p ChatD
 	scanEnd := 0
 	err := m.Run(ctx, func(ctx context.Context, client *telegram.Client) error {
 		return m.withAPI(ctx, client, func(ctx context.Context, api *tg.Client) error {
-		peer, err := resolveChatPeer(ctx, api, p.ChatID, p.Username)
+		peer, err := resolveChatPeer(ctx, api, p.ChatID, p.Username, true)
 		if err != nil {
-			return err
+			return friendlyChatAccessErr(err)
 		}
-		chatName := p.ChatTitle
+		info := peerChatInfo(peer)
+		chatName := info.Title
 		if chatName == "" {
-			chatName = peer.VisibleName()
+			chatName = strings.TrimSpace(p.ChatTitle)
 		}
-		chatID := peer.ID()
+		chatID := info.ChatID
+		if opt.OnResolved != nil && (info.Title != "" || info.Username != "" || info.ChatID != 0) {
+			opt.OnResolved(info)
+		}
 
 		jobs, end, err := collectChatMedia(ctx, api, peer, p)
 		if err != nil {
-			return err
+			return friendlyChatAccessErr(err)
 		}
 		scanEnd = end
 		slog.Info("chat download jobs", "chat", chatID, "mode", p.Mode, "jobs", len(jobs), "scanEnd", end)
@@ -130,6 +135,16 @@ func (m *Manager) DownloadChat(ctx context.Context, opt DownloadOptions, p ChatD
 				}
 				if opt.OnProgress != nil {
 					opt.OnProgress(done, total, fmt.Sprintf("跳过无媒体 msg=%d", msg.ID))
+				}
+				continue
+			}
+			if !MatchContentType(opt.ContentType, file.MIMEType, file.Name) {
+				done++
+				if opt.OnItem != nil {
+					opt.OnItem(chatID, msg.ID, "skipped", file.Name, "", "类型不符")
+				}
+				if opt.OnProgress != nil {
+					opt.OnProgress(done, total, file.Name+" (类型不符)")
 				}
 				continue
 			}
@@ -370,19 +385,166 @@ func expandAlbums(ctx context.Context, api *tg.Client, peer tg.InputPeerClass, m
 	return final, nil
 }
 
-func resolveChatPeer(ctx context.Context, api *tg.Client, chatID int64, username string) (peers.Peer, error) {
-	manager := peers.Options{}.Build(api)
-	if username = strings.TrimPrefix(strings.TrimSpace(username), "@"); username != "" {
-		if p, err := manager.Resolve(ctx, username); err == nil {
-			return p, nil
+func peerChatInfo(peer peers.Peer) ChatInfo {
+	info := ChatInfo{
+		ChatID: peer.ID(),
+		Title:  strings.TrimSpace(peer.VisibleName()),
+		Kind:   "channel",
+	}
+	if u, ok := peer.Username(); ok {
+		info.Username = strings.TrimPrefix(strings.TrimSpace(u), "@")
+	}
+	switch p := peer.(type) {
+	case peers.Chat:
+		info.Kind = "group"
+		_ = p
+	case peers.Channel:
+		if p.IsSupergroup() {
+			info.Kind = "group"
+		} else {
+			info.Kind = "channel"
 		}
 	}
-	// 先拉对话列表，写入 peers 缓存（含 access_hash）
+	return info
+}
+
+// ResolveChatInfo 解析频道/群的真实 ID、标题与用户名（公开未加入可用 @username）。
+func (m *Manager) ResolveChatInfo(ctx context.Context, chatID int64, username string) (*ChatInfo, error) {
+	var info ChatInfo
+	err := m.Run(ctx, func(ctx context.Context, client *telegram.Client) error {
+		peer, err := resolveChatPeer(ctx, client.API(), chatID, username, false)
+		if err != nil {
+			return err
+		}
+		info = peerChatInfo(peer)
+		return nil
+	})
+	if err != nil {
+		return nil, friendlyChatAccessErr(err)
+	}
+	return &info, nil
+}
+
+// FetchChatSnapshot 解析 peer 并取最新消息 ID。
+// 水位走 messages.getPeerDialogs（与同步对话同类接口），不用 getHistory，避免普通会话被限流。
+func (m *Manager) FetchChatSnapshot(ctx context.Context, chatID int64, username string) (*ChatInfo, int, error) {
+	var info ChatInfo
+	var lastMessageID int
+	err := m.Run(ctx, func(ctx context.Context, client *telegram.Client) error {
+		api := client.API()
+		peer, err := resolveChatPeer(ctx, api, chatID, username, false)
+		if err != nil {
+			return err
+		}
+		switch peer.(type) {
+		case peers.Channel, peers.Chat:
+			// ok
+		default:
+			return fmt.Errorf("仅支持频道或群组，不能添加用户会话")
+		}
+		info = peerChatInfo(peer)
+		topID, topErr := peerTopMessageID(ctx, api, peer)
+		if topErr != nil {
+			if isChatAccessDenied(topErr) {
+				return topErr
+			}
+			slog.Warn("snapshot top message", "chatId", info.ChatID, "err", topErr)
+			return nil
+		}
+		lastMessageID = topID
+		return nil
+	})
+	if err != nil {
+		return nil, 0, friendlyChatAccessErr(err)
+	}
+	return &info, lastMessageID, nil
+}
+
+func peerTopMessageID(ctx context.Context, api *tg.Client, peer peers.Peer) (int, error) {
+	res, err := api.MessagesGetPeerDialogs(ctx, []tg.InputDialogPeerClass{
+		&tg.InputDialogPeer{Peer: peer.InputPeer()},
+	})
+	if err != nil {
+		return 0, err
+	}
+	top := 0
+	for _, d := range res.Dialogs {
+		if dialog, ok := d.(*tg.Dialog); ok && dialog.TopMessage > top {
+			top = dialog.TopMessage
+		}
+	}
+	if top > 0 {
+		return top, nil
+	}
+	for _, m := range res.Messages {
+		if msg, ok := m.(*tg.Message); ok && msg.ID > top {
+			top = msg.ID
+		}
+	}
+	return top, nil
+}
+
+func resolveChatPeer(ctx context.Context, api *tg.Client, chatID int64, username string, allowDialogScan bool) (peers.Peer, error) {
+	manager := peers.Options{}.Build(api)
+	var accessErr error
+	if username = strings.TrimPrefix(strings.TrimSpace(username), "@"); username != "" {
+		p, err := manager.Resolve(ctx, username)
+		if err == nil {
+			return p, nil
+		}
+		if isChatAccessDenied(err) || tgerr.Is(err, "USERNAME_INVALID") || tgerr.Is(err, "USERNAME_NOT_OCCUPIED") {
+			// 用户名明确无权 / 不存在：直接返回，避免被后续模糊错误盖住
+			if chatID == 0 {
+				return nil, err
+			}
+			accessErr = err
+		} else if chatID == 0 {
+			return nil, fmt.Errorf("找不到公开频道 @%s：%w", username, err)
+		}
+	}
+
+	plain := plainChannelID(chatID)
+	// 优先直接解析（公开频道 username 已试过；数字 ID / 已缓存 access_hash）
+	tryIDs := []int64{chatID, plain}
+	if plain > 0 {
+		tryIDs = append(tryIDs, channelMarkedID(plain))
+	}
+	seen := map[int64]struct{}{}
+	for _, id := range tryIDs {
+		if id == 0 {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		p, err := tutil.GetInputPeer(ctx, manager, strconv.FormatInt(id, 10))
+		if err == nil {
+			return p, nil
+		}
+		if isChatAccessDenied(err) {
+			accessErr = err
+		}
+	}
+
+	if !allowDialogScan {
+		if accessErr != nil {
+			return nil, accessErr
+		}
+		if username != "" {
+			return nil, fmt.Errorf("找不到频道 @%s：可能不存在、未加入或为非公开频道", username)
+		}
+		return nil, fmt.Errorf("找不到频道 %d：未加入的非公开频道无法访问；公开频道请填 @用户名", chatID)
+	}
+
+	// 已加入频道：从对话列表补 access_hash
 	elems, err := dialogs.NewQueryBuilder(api).GetDialogs().BatchSize(100).Collect(ctx)
 	if err != nil {
+		if accessErr != nil {
+			return nil, accessErr
+		}
 		return nil, errors.Wrap(err, "获取对话列表")
 	}
-	plain := plainChannelID(chatID)
 	for _, el := range elems {
 		if el.Deleted() {
 			continue
@@ -395,20 +557,26 @@ func resolveChatPeer(ctx context.Context, api *tg.Client, chatID int64, username
 			return p, nil
 		}
 		if ch, ok := p.(peers.Channel); ok {
-			if channelMarkedID(ch.ID()) == chatID {
+			if channelMarkedID(ch.ID()) == chatID || ch.ID() == plain || channelMarkedID(ch.ID()) == channelMarkedID(plain) {
 				return p, nil
 			}
 		}
 	}
-	if p, err := tutil.GetInputPeer(ctx, manager, strconv.FormatInt(plain, 10)); err == nil {
-		return p, nil
+	if accessErr != nil {
+		return nil, accessErr
 	}
-	if plain != chatID {
-		if p, err := tutil.GetInputPeer(ctx, manager, strconv.FormatInt(chatID, 10)); err == nil {
-			return p, nil
-		}
+	if username != "" {
+		return nil, fmt.Errorf("找不到频道 @%s：可能不存在、未加入或为非公开频道", username)
 	}
-	return nil, fmt.Errorf("找不到对话 %d，请先在 Telegram 页同步频道", chatID)
+	return nil, fmt.Errorf("找不到频道 %d：未加入的非公开频道无法访问；公开频道请填 @用户名", chatID)
+}
+
+// NormalizeChannelChatID 将 t.me/c/<id> 的正数为带 -100 前缀的频道 ID。
+func NormalizeChannelChatID(id int64) int64 {
+	if id > 0 {
+		return channelMarkedID(id)
+	}
+	return id
 }
 
 func channelMarkedID(channelID int64) int64 {

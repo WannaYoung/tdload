@@ -241,5 +241,17 @@ func taskViewEnriched(s *Server, r *http.Request, t *db.Task) map[string]any {
 	if chatID, ok := opt["chatId"].(float64); ok {
 		v["chatId"] = int64(chatID)
 	}
+	if username, ok := opt["username"].(string); ok && strings.TrimSpace(username) != "" {
+		v["username"] = strings.TrimPrefix(strings.TrimSpace(username), "@")
+	}
+	if chatTitle, ok := opt["chatTitle"].(string); ok && strings.TrimSpace(chatTitle) != "" {
+		v["chatTitle"] = strings.TrimSpace(chatTitle)
+	}
+	if fromID, ok := opt["fromMessageId"].(float64); ok && fromID > 0 {
+		v["fromMessageId"] = int(fromID)
+	}
+	if count, ok := opt["count"].(float64); ok && count > 0 {
+		v["count"] = int(count)
+	}
 	return v
 }

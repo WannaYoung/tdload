@@ -150,6 +150,7 @@ func (w *Watcher) runOne(ctx context.Context, item db.WatchedChat, favID int64, 
 		}
 		optMap := map[string]any{
 			"watchId": item.ID, "chatId": item.ChatID, "fromMessageId": from, "toMessageId": to, "messageIds": ids,
+			"contentType": parseWatchContentType(item.FilterJSON),
 		}
 		opt, _ := json.Marshal(optMap)
 		title := fmt.Sprintf("监听 · 我的收藏 · #%d–#%d", from, to)
@@ -173,6 +174,7 @@ func (w *Watcher) runOne(ctx context.Context, item db.WatchedChat, favID int64, 
 	}
 	optMap := map[string]any{
 		"watchId": item.ID, "chatId": item.ChatID, "fromMessageId": from, "toMessageId": to, "count": count,
+		"contentType": parseWatchContentType(item.FilterJSON),
 	}
 	opt, _ := json.Marshal(optMap)
 	title := item.ChatTitle
@@ -199,4 +201,12 @@ func (w *Watcher) publishHit(item db.WatchedChat, taskID int64, from, to, count 
 		Done: from, Total: to, Title: item.ChatTitle, Status: "queued",
 		Error: fmt.Sprintf("%d", count),
 	})
+}
+
+func parseWatchContentType(filterJSON string) string {
+	var f struct {
+		ContentType string `json:"contentType"`
+	}
+	_ = json.Unmarshal([]byte(filterJSON), &f)
+	return tg.NormalizeContentType(f.ContentType)
 }

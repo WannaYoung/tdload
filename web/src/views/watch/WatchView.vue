@@ -5,14 +5,18 @@ import {
   NDataTable,
   NEmpty,
   NSelect,
+  NTag,
   useMessage,
   type DataTableColumns,
+  type SelectOption,
 } from "naive-ui";
 import { api } from "../../api/http";
 import { useMobile } from "../../composables/useMobile";
 import type { WatchCandidate, WatchRow } from "../../api/types";
 
 defineOptions({ name: "WatchView" });
+
+type ContentType = "all" | "media" | "image" | "video";
 
 const message = useMessage();
 const isMobile = useMobile();
@@ -21,7 +25,102 @@ const adding = ref(false);
 const rows = ref<WatchRow[]>([]);
 const candidates = ref<WatchCandidate[]>([]);
 const selectedChatId = ref<number | null>(null);
+const selectedContentType = ref<ContentType>("all");
 const intervalMinutes = ref(30);
+
+const contentTypeOptions: SelectOption[] = [
+  { label: "全部", value: "all" },
+  { label: "媒体", value: "media" },
+  { label: "图片", value: "image" },
+  { label: "视频", value: "video" },
+];
+
+const kindMeta: Record<
+  string,
+  { label: string; color: { color: string; textColor: string; borderColor: string } }
+> = {
+  saved: {
+    label: "收藏",
+    color: { color: "rgba(244, 114, 182, 0.16)", textColor: "#f9a8d4", borderColor: "transparent" },
+  },
+  custom: {
+    label: "自定义",
+    color: { color: "rgba(74, 222, 128, 0.14)", textColor: "#86efac", borderColor: "transparent" },
+  },
+  channel: {
+    label: "频道",
+    color: { color: "rgba(244, 114, 182, 0.16)", textColor: "#f9a8d4", borderColor: "transparent" },
+  },
+  supergroup: {
+    label: "超级群",
+    color: { color: "rgba(96, 165, 250, 0.16)", textColor: "#93c5fd", borderColor: "transparent" },
+  },
+  group: {
+    label: "群组",
+    color: { color: "rgba(251, 191, 36, 0.16)", textColor: "#fcd34d", borderColor: "transparent" },
+  },
+};
+
+function kindOfCandidate(c: WatchCandidate) {
+  if (c.kind === "saved") return "saved";
+  if (c.isCustom || c.kind === "custom") return "custom";
+  return c.kind || "channel";
+}
+
+function kindOfRow(r: WatchRow) {
+  if (r.isFavorites) return "saved";
+  if (r.isCustom || r.kind === "custom") return "custom";
+  return r.kind || "channel";
+}
+
+function renderKindTag(kind: string) {
+  const meta = kindMeta[kind];
+  if (!meta) return null;
+  return h(NTag, { size: "small", bordered: false, color: meta.color }, { default: () => meta.label });
+}
+
+const contentTypeMeta: Record<
+  string,
+  { label: string; color: { color: string; textColor: string; borderColor: string } }
+> = {
+  all: {
+    label: "全部",
+    color: {
+      color: "rgba(255, 255, 255, 0.1)",
+      textColor: "rgba(255, 255, 255, 0.72)",
+      borderColor: "transparent",
+    },
+  },
+  media: {
+    label: "媒体",
+    color: {
+      color: "rgba(244, 114, 182, 0.16)",
+      textColor: "#f9a8d4",
+      borderColor: "transparent",
+    },
+  },
+  image: {
+    label: "图片",
+    color: {
+      color: "rgba(251, 191, 36, 0.16)",
+      textColor: "#fbbf24",
+      borderColor: "transparent",
+    },
+  },
+  video: {
+    label: "视频",
+    color: {
+      color: "rgba(96, 165, 250, 0.16)",
+      textColor: "#93c5fd",
+      borderColor: "transparent",
+    },
+  },
+};
+
+function renderContentType(ct?: string) {
+  const meta = contentTypeMeta[ct || "all"] || contentTypeMeta.all;
+  return h(NTag, { size: "small", bordered: false, color: meta.color }, { default: () => meta.label });
+}
 
 let timer: number | null = null;
 
@@ -35,9 +134,17 @@ function formatTime(v?: string) {
 
 const selectOptions = () =>
   candidates.value.map((c) => ({
-    label: c.username ? `${c.title} (@${c.username})` : c.title,
+    label: c.title,
     value: c.chatId,
+    kind: kindOfCandidate(c),
   }));
+
+function renderSelectLabel(option: { label?: string; value?: string | number; kind?: string }) {
+  return h("div", { class: "opt-row" }, [
+    h("span", { class: "opt-title" }, String(option.label || option.value || "")),
+    option.kind ? renderKindTag(option.kind) : null,
+  ]);
+}
 
 const columns: DataTableColumns<WatchRow> = [
   {
@@ -46,9 +153,17 @@ const columns: DataTableColumns<WatchRow> = [
     ellipsis: { tooltip: true },
     render: (r) =>
       h("div", { class: "name-cell" }, [
-        h("div", { class: "name-title" }, r.chatTitle || String(r.chatId)),
-        r.isFavorites ? h("div", { class: "name-sub" }, "收藏") : null,
+        h("div", { class: "name-title-row" }, [
+          h("span", { class: "name-title" }, r.chatTitle || String(r.chatId)),
+          renderKindTag(kindOfRow(r)),
+        ]),
       ]),
+  },
+  {
+    title: "内容类型",
+    key: "contentType",
+    width: 96,
+    render: (r) => renderContentType(r.contentType),
   },
   {
     title: "已下载",
@@ -131,10 +246,14 @@ async function addWatch() {
   try {
     await api("/api/watch", {
       method: "POST",
-      body: JSON.stringify({ chatId: selectedChatId.value }),
+      body: JSON.stringify({
+        chatId: selectedChatId.value,
+        contentType: selectedContentType.value,
+      }),
     });
     message.success("已加入监听");
     selectedChatId.value = null;
+    selectedContentType.value = "all";
     await load();
   } catch (e) {
     message.error(e instanceof Error ? e.message : "添加失败");
@@ -184,7 +303,14 @@ onUnmounted(() => {
           clearable
           placeholder="选择要监听的频道"
           :options="selectOptions()"
+          :render-label="renderSelectLabel"
           :disabled="loading || !candidates.length"
+        />
+        <n-select
+          v-model:value="selectedContentType"
+          class="composer-type"
+          :options="contentTypeOptions"
+          :disabled="loading"
         />
         <n-button type="primary" :loading="adding" :disabled="selectedChatId == null" @click="addWatch">
           添加监听
@@ -260,6 +386,10 @@ h2 {
   flex: 1 1 auto;
   min-width: 0;
 }
+.composer-type {
+  flex: 0 0 110px;
+  width: 110px;
+}
 .message-table {
   flex: 1 1 auto;
   min-height: 0;
@@ -268,18 +398,28 @@ h2 {
 :deep(.name-cell) {
   min-width: 0;
 }
-:deep(.name-title) {
+:deep(.name-title-row),
+:deep(.opt-row) {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+:deep(.name-title),
+:deep(.opt-title) {
   font-size: 13px;
   color: rgba(255, 255, 255, 0.9);
-}
-:deep(.name-sub) {
-  margin-top: 2px;
-  font-size: 12px;
-  color: rgba(255, 255, 255, 0.4);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 @media (max-width: 1000px) {
   .composer.row {
     flex-direction: column;
+  }
+  .composer-type {
+    flex: 1 1 auto;
+    width: 100%;
   }
   .composer.row > .n-button {
     align-self: flex-end;

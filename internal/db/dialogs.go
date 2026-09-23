@@ -3,22 +3,25 @@ package db
 import (
 	"context"
 	"database/sql"
+	"strconv"
+	"strings"
 	"time"
 )
 
 const DefaultTGAccountID int64 = 1
 
 type TGDialog struct {
-	ID               int64
-	TGAccountID      int64
-	ChatID           int64
-	Title            string
-	Username         string
-	Kind             string
-	MessageCount     int
-	DownloadedCount  int
-	LastMessageID    int
-	SyncedAt         string
+	ID              int64
+	TGAccountID     int64
+	ChatID          int64
+	Title           string
+	Username        string
+	Kind            string
+	MessageCount    int
+	DownloadedCount int
+	LastMessageID   int
+	SyncedAt        string
+	IsCustom        bool
 }
 
 func (d *DB) ReplaceTGDialogs(ctx context.Context, accountID int64, rows []TGDialog) error {
@@ -28,7 +31,8 @@ func (d *DB) ReplaceTGDialogs(ctx context.Context, accountID int64, rows []TGDia
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	if _, err := tx.ExecContext(ctx, `DELETE FROM tg_dialogs WHERE tg_account_id=?`, accountID); err != nil {
+	// 只清非自定义对话；自定义频道在用户未加入前保留。
+	if _, err := tx.ExecContext(ctx, `DELETE FROM tg_dialogs WHERE tg_account_id=? AND is_custom=0`, accountID); err != nil {
 		return err
 	}
 	for _, r := range rows {
@@ -36,9 +40,19 @@ func (d *DB) ReplaceTGDialogs(ctx context.Context, accountID int64, rows []TGDia
 		if err != nil {
 			return err
 		}
+		// 若同 chat_id 已是自定义行（用户后来加入），UPSERT 合并并清 is_custom。
 		_, err = tx.ExecContext(ctx, `
-INSERT INTO tg_dialogs (tg_account_id, chat_id, title, username, kind, message_count, downloaded_count, last_message_id, synced_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+INSERT INTO tg_dialogs (tg_account_id, chat_id, title, username, kind, message_count, downloaded_count, last_message_id, synced_at, is_custom)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+ON CONFLICT(tg_account_id, chat_id) DO UPDATE SET
+  title=excluded.title,
+  username=excluded.username,
+  kind=excluded.kind,
+  message_count=excluded.message_count,
+  downloaded_count=excluded.downloaded_count,
+  last_message_id=excluded.last_message_id,
+  synced_at=excluded.synced_at,
+  is_custom=0`,
 			accountID, r.ChatID, r.Title, r.Username, r.Kind, r.MessageCount, downloaded, r.LastMessageID, r.SyncedAt)
 		if err != nil {
 			return err
@@ -75,8 +89,8 @@ func (d *DB) ListTGDialogs(ctx context.Context, accountID int64, limit, offset i
 		return nil, 0, err
 	}
 	rows, err := d.SQL.QueryContext(ctx, `
-SELECT id, tg_account_id, chat_id, title, username, kind, message_count, downloaded_count, last_message_id, synced_at
-FROM tg_dialogs WHERE tg_account_id=? ORDER BY title COLLATE NOCASE LIMIT ? OFFSET ?`,
+SELECT id, tg_account_id, chat_id, title, username, kind, message_count, downloaded_count, last_message_id, synced_at, is_custom
+FROM tg_dialogs WHERE tg_account_id=? ORDER BY is_custom ASC, title COLLATE NOCASE LIMIT ? OFFSET ?`,
 		accountID, limit, offset)
 	if err != nil {
 		return nil, 0, err
@@ -85,10 +99,12 @@ FROM tg_dialogs WHERE tg_account_id=? ORDER BY title COLLATE NOCASE LIMIT ? OFFS
 	var out []TGDialog
 	for rows.Next() {
 		var r TGDialog
+		var isCustom int
 		if err := rows.Scan(&r.ID, &r.TGAccountID, &r.ChatID, &r.Title, &r.Username, &r.Kind,
-			&r.MessageCount, &r.DownloadedCount, &r.LastMessageID, &r.SyncedAt); err != nil {
+			&r.MessageCount, &r.DownloadedCount, &r.LastMessageID, &r.SyncedAt, &isCustom); err != nil {
 			return nil, 0, err
 		}
+		r.IsCustom = isCustom != 0
 		out = append(out, r)
 	}
 	return out, total, rows.Err()
@@ -96,18 +112,178 @@ FROM tg_dialogs WHERE tg_account_id=? ORDER BY title COLLATE NOCASE LIMIT ? OFFS
 
 func (d *DB) GetTGDialog(ctx context.Context, accountID, chatID int64) (*TGDialog, error) {
 	row := d.SQL.QueryRowContext(ctx, `
-SELECT id, tg_account_id, chat_id, title, username, kind, message_count, downloaded_count, last_message_id, synced_at
+SELECT id, tg_account_id, chat_id, title, username, kind, message_count, downloaded_count, last_message_id, synced_at, is_custom
 FROM tg_dialogs WHERE tg_account_id=? AND chat_id=?`, accountID, chatID)
 	var r TGDialog
+	var isCustom int
 	err := row.Scan(&r.ID, &r.TGAccountID, &r.ChatID, &r.Title, &r.Username, &r.Kind,
-		&r.MessageCount, &r.DownloadedCount, &r.LastMessageID, &r.SyncedAt)
+		&r.MessageCount, &r.DownloadedCount, &r.LastMessageID, &r.SyncedAt, &isCustom)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
+	r.IsCustom = isCustom != 0
 	return &r, nil
+}
+
+// dialogChatIDVariants 生成同一频道可能出现的 chat_id 形式（带/不带 -100 前缀）。
+func dialogChatIDVariants(chatID int64) []int64 {
+	if chatID == 0 {
+		return nil
+	}
+	seen := map[int64]struct{}{chatID: {}}
+	out := []int64{chatID}
+	plain := chatID
+	if chatID < 0 {
+		s := strconv.FormatInt(chatID, 10)
+		if strings.HasPrefix(s, "-100") {
+			if n, err := strconv.ParseInt(strings.TrimPrefix(s, "-100"), 10, 64); err == nil {
+				plain = n
+			}
+		}
+	}
+	marked := chatID
+	if chatID > 0 {
+		marked = -(1_000_000_000_000 + chatID)
+	} else if plain > 0 && plain != chatID {
+		marked = -(1_000_000_000_000 + plain)
+	}
+	for _, id := range []int64{plain, marked} {
+		if id == 0 {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
+	}
+	return out
+}
+
+// FindTGDialogMatch 按 chat_id（兼容 -100 形式）或 username 查找已有对话。
+func (d *DB) FindTGDialogMatch(ctx context.Context, accountID, chatID int64, username string) (*TGDialog, error) {
+	for _, id := range dialogChatIDVariants(chatID) {
+		row, err := d.GetTGDialog(ctx, accountID, id)
+		if err != nil {
+			return nil, err
+		}
+		if row != nil {
+			return row, nil
+		}
+	}
+	username = strings.TrimPrefix(strings.TrimSpace(username), "@")
+	if username == "" {
+		return nil, nil
+	}
+	row := d.SQL.QueryRowContext(ctx, `
+SELECT id, tg_account_id, chat_id, title, username, kind, message_count, downloaded_count, last_message_id, synced_at, is_custom
+FROM tg_dialogs WHERE tg_account_id=? AND lower(username)=lower(?) LIMIT 1`, accountID, username)
+	var r TGDialog
+	var isCustom int
+	err := row.Scan(&r.ID, &r.TGAccountID, &r.ChatID, &r.Title, &r.Username, &r.Kind,
+		&r.MessageCount, &r.DownloadedCount, &r.LastMessageID, &r.SyncedAt, &isCustom)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	r.IsCustom = isCustom != 0
+	return &r, nil
+}
+
+// ListCustomTGDialogs 列出账号下全部自定义频道。
+func (d *DB) ListCustomTGDialogs(ctx context.Context, accountID int64) ([]TGDialog, error) {
+	rows, err := d.SQL.QueryContext(ctx, `
+SELECT id, tg_account_id, chat_id, title, username, kind, message_count, downloaded_count, last_message_id, synced_at, is_custom
+FROM tg_dialogs WHERE tg_account_id=? AND is_custom=1 ORDER BY title COLLATE NOCASE`, accountID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []TGDialog
+	for rows.Next() {
+		var r TGDialog
+		var isCustom int
+		if err := rows.Scan(&r.ID, &r.TGAccountID, &r.ChatID, &r.Title, &r.Username, &r.Kind,
+			&r.MessageCount, &r.DownloadedCount, &r.LastMessageID, &r.SyncedAt, &isCustom); err != nil {
+			return nil, err
+		}
+		r.IsCustom = isCustom != 0
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// UpsertCustomDialog 写入自定义频道（is_custom=1）；冲突时更新元数据并保持自定义标记。
+func (d *DB) UpsertCustomDialog(ctx context.Context, accountID int64, dialog TGDialog) error {
+	now := dialog.SyncedAt
+	if now == "" {
+		now = time.Now().UTC().Format(time.RFC3339)
+	}
+	kind := dialog.Kind
+	if kind == "" {
+		kind = "custom"
+	}
+	downloaded, err := d.countDownloadedMessages(ctx, d.SQL, dialog.ChatID)
+	if err != nil {
+		return err
+	}
+	_, err = d.SQL.ExecContext(ctx, `
+INSERT INTO tg_dialogs (tg_account_id, chat_id, title, username, kind, message_count, downloaded_count, last_message_id, synced_at, is_custom)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+ON CONFLICT(tg_account_id, chat_id) DO UPDATE SET
+  title=excluded.title,
+  username=excluded.username,
+  kind=excluded.kind,
+  message_count=excluded.message_count,
+  downloaded_count=excluded.downloaded_count,
+  last_message_id=excluded.last_message_id,
+  synced_at=excluded.synced_at,
+  is_custom=1`,
+		accountID, dialog.ChatID, dialog.Title, dialog.Username, kind,
+		dialog.MessageCount, downloaded, dialog.LastMessageID, now)
+	return err
+}
+
+// DeleteCustomDialog 仅删除 is_custom=1 的行。
+func (d *DB) DeleteCustomDialog(ctx context.Context, accountID, chatID int64) error {
+	res, err := d.SQL.ExecContext(ctx, `
+DELETE FROM tg_dialogs WHERE tg_account_id=? AND chat_id=? AND is_custom=1`, accountID, chatID)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
+// UpdateDialogMeta 更新对话标题/用户名/最新消息 ID。
+func (d *DB) UpdateDialogMeta(ctx context.Context, accountID, chatID int64, title, username string, lastMessageID int) error {
+	now := time.Now().UTC().Format(time.RFC3339)
+	username = strings.TrimPrefix(strings.TrimSpace(username), "@")
+	res, err := d.SQL.ExecContext(ctx, `
+UPDATE tg_dialogs SET title=?, username=?, last_message_id=?, synced_at=?
+WHERE tg_account_id=? AND chat_id=?`, title, username, lastMessageID, now, accountID, chatID)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
 }
 
 func (d *DB) DialogCount(ctx context.Context, accountID int64) (int, error) {
@@ -187,13 +363,32 @@ WHERE tg_account_id=? AND chat_id=?`, accountID, chatID).Scan(&n)
 }
 
 func (d *DB) HasActiveChannelTask(ctx context.Context, chatID int64) (bool, int64, error) {
+	return d.hasActiveChannelTaskBySources(ctx, chatID, "chat_continue", "chat_range")
+}
+
+// HasActiveChatBatchTask 任务页频道下载进行中任务。
+func (d *DB) HasActiveChatBatchTask(ctx context.Context, chatID int64) (bool, int64, error) {
+	return d.hasActiveChannelTaskBySources(ctx, chatID, "chat_batch")
+}
+
+func (d *DB) hasActiveChannelTaskBySources(ctx context.Context, chatID int64, sources ...string) (bool, int64, error) {
+	if len(sources) == 0 {
+		return false, 0, nil
+	}
+	placeholders := make([]string, len(sources))
+	args := make([]any, 0, len(sources)+1)
+	for i, s := range sources {
+		placeholders[i] = "?"
+		args = append(args, s)
+	}
+	args = append(args, chatID)
 	var id int64
 	err := d.SQL.QueryRowContext(ctx, `
 SELECT id FROM tasks
 WHERE status IN ('queued','running','paused')
-  AND source IN ('chat_continue','chat_batch','chat_range')
+  AND source IN (`+strings.Join(placeholders, ",")+`)
   AND json_extract(options_json, '$.chatId') = ?
-ORDER BY id DESC LIMIT 1`, chatID).Scan(&id)
+ORDER BY id DESC LIMIT 1`, args...).Scan(&id)
 	if err == sql.ErrNoRows {
 		return false, 0, nil
 	}
@@ -220,7 +415,7 @@ SELECT id, source, title, status, tg_account_id, options_json,
        total_bytes, done_bytes, total_files, done_files, speed_bps, error,
        created_at, started_at, finished_at
 FROM tasks
-WHERE source IN ('chat_continue','chat_batch','chat_range')
+WHERE source IN ('chat_continue','chat_range')
   AND json_extract(options_json, '$.chatId') = ?
 ORDER BY id DESC LIMIT ?`, chatID, limit)
 	if err != nil {
@@ -238,13 +433,26 @@ ORDER BY id DESC LIMIT ?`, chatID, limit)
 	return out, rows.Err()
 }
 
+// ClearCompletedChannelTasksForChat 清除该频道页续下的已结束批次（不影响任务页 chat_batch）。
+func (d *DB) ClearCompletedChannelTasksForChat(ctx context.Context, chatID int64) (int64, error) {
+	res, err := d.SQL.ExecContext(ctx, `
+DELETE FROM tasks
+WHERE status IN ('done','cancelled','failed')
+  AND source IN ('chat_continue','chat_range')
+  AND json_extract(options_json, '$.chatId') = ?`, chatID)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
 func (d *DB) CountFailedItemsForChatActive(ctx context.Context, chatID int64) (int, error) {
 	var n int
 	err := d.SQL.QueryRowContext(ctx, `
 SELECT COUNT(1) FROM task_items ti
 JOIN tasks t ON t.id = ti.task_id
 WHERE ti.status='failed'
-  AND t.source IN ('chat_continue','chat_batch','chat_range')
+  AND t.source IN ('chat_continue','chat_range')
   AND json_extract(t.options_json, '$.chatId') = ?`, chatID).Scan(&n)
 	return n, err
 }
@@ -396,11 +604,17 @@ func (d *DB) LibraryChatFilters(ctx context.Context, accountID int64, favoritesC
 	// 单连接 SQLite：禁止在未关闭的 rows 上再 Query（会死锁）
 	rows, err := d.SQL.QueryContext(ctx, `
 SELECT m.chat_id,
-       COALESCE(NULLIF(d.title, ''), CAST(m.chat_id AS TEXT)) AS title
+       COALESCE(
+         NULLIF(d.title, ''),
+         NULLIF(l.title, ''),
+         CASE WHEN l.username != '' THEN '@' || l.username END,
+         CAST(m.chat_id AS TEXT)
+       ) AS title
 FROM (
   SELECT chat_id, COUNT(1) AS c FROM media_index GROUP BY chat_id
 ) m
 LEFT JOIN tg_dialogs d ON d.chat_id = m.chat_id AND d.tg_account_id = ?
+LEFT JOIN chat_labels l ON l.chat_id = m.chat_id
 ORDER BY m.c DESC`, accountID)
 	if err != nil {
 		return nil, err

@@ -495,3 +495,69 @@ func friendlyAuthErr(err error) error {
 		return err
 	}
 }
+
+func isChatAccessDenied(err error) bool {
+	if err == nil {
+		return false
+	}
+	switch {
+	case tgerr.Is(err, "CHANNEL_PRIVATE"),
+		tgerr.Is(err, "CHAT_PRIVATE"),
+		tgerr.Is(err, "CHANNEL_INVALID"),
+		tgerr.Is(err, "CHAT_ID_INVALID"),
+		tgerr.Is(err, "PEER_ID_INVALID"),
+		tgerr.Is(err, "USER_BANNED_IN_CHANNEL"),
+		tgerr.Is(err, "CHAT_ADMIN_REQUIRED"),
+		tgerr.Is(err, "CHAT_GUEST_SEND_FORBIDDEN"),
+		tgerr.Is(err, "CHAT_WRITE_FORBIDDEN"),
+		tgerr.Is(err, "CHANNEL_PUBLIC_GROUP_NA"):
+		return true
+	}
+	up := strings.ToUpper(err.Error())
+	for _, key := range []string{
+		"CHANNEL_PRIVATE", "CHAT_PRIVATE", "CHANNEL_INVALID",
+		"PEER_ID_INVALID", "CHAT_ID_INVALID", "USER_BANNED_IN_CHANNEL",
+	} {
+		if strings.Contains(up, key) {
+			return true
+		}
+	}
+	return false
+}
+
+// friendlyChatAccessErr 将无权访问 / 非公开 / 无效频道等错误转为可读中文。
+func friendlyChatAccessErr(err error) error {
+	if err == nil {
+		return nil
+	}
+	if d, ok := tgerr.AsFloodWait(err); ok {
+		sec := int(d.Seconds())
+		if sec < 1 {
+			sec = 1
+		}
+		return fmt.Errorf("请求过于频繁，请 %d 秒后再试", sec)
+	}
+	switch {
+	case tgerr.Is(err, "CHANNEL_PRIVATE"), tgerr.Is(err, "CHAT_PRIVATE"),
+		tgerr.Is(err, "CHANNEL_FORBIDDEN"), tgerr.Is(err, "CHAT_FORBIDDEN"),
+		strings.Contains(strings.ToUpper(err.Error()), "CHANNEL_PRIVATE"),
+		strings.Contains(strings.ToUpper(err.Error()), "CHAT_PRIVATE"),
+		strings.Contains(strings.ToUpper(err.Error()), "CHANNEL_FORBIDDEN"),
+		strings.Contains(strings.ToUpper(err.Error()), "CHAT_FORBIDDEN"):
+		return fmt.Errorf("无法访问该频道/群组：未加入或为非公开频道，请先加入后再试")
+	case tgerr.Is(err, "USER_BANNED_IN_CHANNEL"):
+		return fmt.Errorf("账号已被该频道/群组封禁，无法访问")
+	case tgerr.Is(err, "USERNAME_INVALID"), tgerr.Is(err, "USERNAME_NOT_OCCUPIED"):
+		return fmt.Errorf("用户名不存在或无效")
+	case tgerr.Is(err, "CHANNEL_INVALID"), tgerr.Is(err, "CHAT_ID_INVALID"), tgerr.Is(err, "PEER_ID_INVALID"),
+		tgerr.Is(err, "CHANNEL_PUBLIC_GROUP_NA"):
+		return fmt.Errorf("频道/群组无效或无权访问（非公开频道需先加入；公开频道可填 @用户名）")
+	case tgerr.Is(err, "CHAT_ADMIN_REQUIRED"), tgerr.Is(err, "CHAT_WRITE_FORBIDDEN"),
+		tgerr.Is(err, "CHAT_GUEST_SEND_FORBIDDEN"):
+		return fmt.Errorf("没有访问该频道/群组的权限")
+	case isChatAccessDenied(err):
+		return fmt.Errorf("无法访问该频道/群组：未加入、非公开或没有权限")
+	default:
+		return err
+	}
+}

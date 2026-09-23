@@ -11,6 +11,7 @@ import {
   NProgress,
   NSpin,
   NTag,
+  useDialog,
   useMessage,
 } from "naive-ui";
 import { api } from "../../api/http";
@@ -22,9 +23,12 @@ defineOptions({ name: "ChannelDetailView" });
 const route = useRoute();
 const router = useRouter();
 const message = useMessage();
+const dialog = useDialog();
 
 const loading = ref(false);
 const submitting = ref(false);
+const clearing = ref(false);
+const deleting = ref(false);
 const cursorSaving = ref(false);
 const batchSize = ref(100);
 const info = ref<ChannelDownloadInfo | null>(null);
@@ -183,6 +187,56 @@ async function retryFailed(id: number) {
   await load();
 }
 
+const isCustom = computed(() => Boolean(info.value?.isCustom || info.value?.custom || info.value?.kind === "custom"));
+
+const completedBatchCount = computed(
+  () =>
+    (info.value?.recentBatches || []).filter(
+      (t) => t.status === "done" || t.status === "cancelled" || t.status === "failed",
+    ).length,
+);
+
+function confirmDelete() {
+  dialog.warning({
+    title: "删除自定义频道",
+    content: "确定删除该自定义频道？下载记录不会一并清除。",
+    positiveText: "删除",
+    negativeText: "取消",
+    onPositiveClick: () => deleteCustom(),
+  });
+}
+
+async function deleteCustom() {
+  if (!chatId.value) return;
+  deleting.value = true;
+  try {
+    await api(`/api/channels/${chatId.value}`, { method: "DELETE" });
+    message.success("已删除自定义频道");
+    await router.push({ name: "channels" });
+  } catch (e) {
+    message.error(e instanceof Error ? e.message : "删除失败");
+  } finally {
+    deleting.value = false;
+  }
+}
+
+async function clearCompletedBatches(e?: Event) {
+  e?.stopPropagation();
+  if (!chatId.value) return;
+  clearing.value = true;
+  try {
+    const res = await api<{ cleared: number }>(`/api/channels/${chatId.value}/batches/completed`, {
+      method: "DELETE",
+    });
+    message.success(res.cleared ? `已清除 ${res.cleared} 条批次` : "没有可清除的已完成批次");
+    await load();
+  } catch (err) {
+    message.error(err instanceof Error ? err.message : "清除失败");
+  } finally {
+    clearing.value = false;
+  }
+}
+
 function applyEvent(raw: string) {
   try {
     const ev = JSON.parse(raw) as {
@@ -233,7 +287,18 @@ onUnmounted(() => {
         <h2>{{ info?.title || `频道 ${chatId}` }}</h2>
         <p v-if="info?.username" class="sub">@{{ info.username }}</p>
       </div>
-      <n-button secondary :loading="loading" @click="load">刷新</n-button>
+      <div class="head-actions">
+        <n-button
+          v-if="isCustom"
+          secondary
+          type="error"
+          :loading="deleting"
+          @click="confirmDelete"
+        >
+          删除
+        </n-button>
+        <n-button secondary :loading="loading" @click="() => load()">刷新</n-button>
+      </div>
     </header>
 
     <n-spin :show="loading && !info">
@@ -325,7 +390,20 @@ onUnmounted(() => {
 
         <section class="history">
           <n-collapse>
-            <n-collapse-item title="历史批次" name="history">
+            <n-collapse-item name="history">
+              <template #header>历史批次</template>
+              <template #header-extra>
+                <n-button
+                  size="small"
+                  type="primary"
+                  secondary
+                  :loading="clearing"
+                  :disabled="completedBatchCount <= 0"
+                  @click="clearCompletedBatches"
+                >
+                  清除已完成
+                </n-button>
+              </template>
               <n-empty
                 v-if="!(info.recentBatches && info.recentBatches.length)"
                 description="暂无历史批次"
@@ -390,6 +468,11 @@ onUnmounted(() => {
 .head h2 {
   margin: 8px 0 0;
   font-size: 22px;
+}
+.head-actions {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
 }
 .sub {
   margin: 4px 0 0;

@@ -110,12 +110,15 @@ export type ChannelRow = {
   caughtUp?: boolean;
   status?: string;
   syncedAt: string;
+  isCustom?: boolean;
+  custom?: boolean;
 };
 
 export type ChannelDownloadTask = {
   id: number;
   title: string;
   status: string;
+  source?: string;
   progressDone?: number;
   progressTotal?: number;
   doneFiles?: number;
@@ -123,6 +126,11 @@ export type ChannelDownloadTask = {
   itemCounts?: ItemCounts;
   error?: string;
   createdAt?: string;
+  chatId?: number;
+  username?: string;
+  chatTitle?: string;
+  fromMessageId?: number;
+  count?: number;
 };
 
 export type ChannelDownloadInfo = {
@@ -138,6 +146,8 @@ export type ChannelDownloadInfo = {
   failedCount: number;
   status: string;
   syncedAt?: string;
+  isCustom?: boolean;
+  custom?: boolean;
   activeTask?: ChannelDownloadTask | null;
   recentBatches?: ChannelDownloadTask[];
   defaultBatchSize?: number;
@@ -172,8 +182,11 @@ export type WatchRow = {
   id: number;
   chatId: number;
   chatTitle: string;
+  kind?: string;
   isFavorites?: boolean;
+  isCustom?: boolean;
   enabled?: boolean;
+  contentType?: "all" | "media" | "image" | "video" | string;
   lastMessageId: number;
   cursorMessageId?: number;
   downloadedCount: number;
@@ -187,4 +200,5 @@ export type WatchCandidate = {
   title: string;
   kind: string;
   username?: string;
+  isCustom?: boolean;
 };

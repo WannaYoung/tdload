@@ -3,6 +3,7 @@ package tg
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"time"
@@ -96,7 +97,45 @@ func (m *Manager) SyncDialogs(ctx context.Context) (int, error) {
 	if err := m.DB.ReplaceTGDialogs(ctx, defaultAccountID, dbRows); err != nil {
 		return 0, err
 	}
+	// 同步后刷新自定义频道的标题 / 最新消息 ID（不影响已加入对话）。
+	if _, err := m.SyncCustomDialogs(ctx); err != nil {
+		slog.Warn("sync custom dialogs", "err", err)
+	}
 	return len(dbRows), nil
+}
+
+// SyncCustomDialogs 刷新 is_custom=1 的频道元数据与最新消息 ID。
+func (m *Manager) SyncCustomDialogs(ctx context.Context) (int, error) {
+	rows, err := m.DB.ListCustomTGDialogs(ctx, defaultAccountID)
+	if err != nil {
+		return 0, err
+	}
+	ok := 0
+	for _, r := range rows {
+		info, lastID, err := m.FetchChatSnapshot(ctx, r.ChatID, r.Username)
+		if err != nil {
+			slog.Warn("sync custom dialog", "chatId", r.ChatID, "username", r.Username, "err", err)
+			continue
+		}
+		title := info.Title
+		if title == "" {
+			title = r.Title
+		}
+		username := info.Username
+		if username == "" {
+			username = r.Username
+		}
+		if lastID <= 0 {
+			lastID = r.LastMessageID
+		}
+		if err := m.DB.UpdateDialogMeta(ctx, defaultAccountID, r.ChatID, title, username, lastID); err != nil {
+			slog.Warn("update custom dialog meta", "chatId", r.ChatID, "err", err)
+			continue
+		}
+		_ = m.DB.UpsertChatLabel(ctx, r.ChatID, title, username)
+		ok++
+	}
+	return ok, nil
 }
 
 func peerKind(p peers.Peer) (kind string, include bool) {
@@ -217,6 +256,16 @@ func (m *Manager) DownloadSaved(ctx context.Context, opt DownloadOptions, favori
 					done++
 					if opt.OnProgress != nil {
 						opt.OnProgress(done, total, fmt.Sprintf("msg %d 无媒体", mid))
+					}
+					continue
+				}
+				if !MatchContentType(opt.ContentType, file.MIMEType, file.Name) {
+					if opt.OnItem != nil {
+						opt.OnItem(favoritesChatID, mid, "skipped", file.Name, "", "类型不符")
+					}
+					done++
+					if opt.OnProgress != nil {
+						opt.OnProgress(done, total, file.Name+" (类型不符)")
 					}
 					continue
 				}

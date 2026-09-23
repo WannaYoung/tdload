@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref } from "vue";
-import { NButton, useMessage } from "naive-ui";
-import { api } from "../../api/http";
+import { NButton } from "naive-ui";
 import { useMobile } from "../../composables/useMobile";
 import { useAppEvents } from "../../composables/useAppEvents";
 import type { ItemCounts } from "../../api/types";
@@ -22,9 +21,7 @@ type ProgressEv = {
   itemCounts?: ItemCounts;
 };
 
-const message = useMessage();
 const isMobile = useMobile();
-const busy = ref(false);
 
 const messagePanel = ref<{
   reload: (silent?: boolean) => Promise<void>;
@@ -46,39 +43,13 @@ function scheduleMessageSilentReload() {
   }, 400);
 }
 
-async function pauseAll() {
-  busy.value = true;
-  try {
-    const data = await api<{ paused: number }>("/api/tasks/pause-all", { method: "POST", body: "{}" });
-    message.success(`已暂停 ${data.paused} 个任务`);
-    await reload();
-  } catch (e) {
-    message.error(e instanceof Error ? e.message : "暂停失败");
-  } finally {
-    busy.value = false;
-  }
-}
-
-async function startAll() {
-  busy.value = true;
-  try {
-    const data = await api<{ started: number }>("/api/tasks/start-all", { method: "POST", body: "{}" });
-    message.success(`已恢复 ${data.started} 个任务`);
-    await reload();
-  } catch (e) {
-    message.error(e instanceof Error ? e.message : "启动失败");
-  } finally {
-    busy.value = false;
-  }
-}
-
 function applyEvent(raw: string) {
   try {
     const ev = JSON.parse(raw) as ProgressEv;
-    if (ev.kind === "channel" || ev.kind === "saved") return;
-
     const terminal =
       ev.status === "done" || ev.status === "failed" || ev.status === "cancelled";
+
+    if (ev.kind === "saved" || ev.kind === "channel") return;
 
     if (ev.type === "task_item_progress") {
       if (messagePanel.value?.applyItemProgress(ev)) {
@@ -114,11 +85,11 @@ onUnmounted(() => {
 <template>
   <div class="page list-page" :class="{ pinned: !isMobile }">
     <div class="toolbar">
-      <h2>任务</h2>
+      <div class="toolbar-left">
+        <h2>任务</h2>
+      </div>
       <div class="toolbar-actions">
-        <n-button quaternary :disabled="busy" @click="pauseAll">全部暂停</n-button>
-        <n-button quaternary :disabled="busy" @click="startAll">全部开始</n-button>
-        <n-button quaternary :disabled="busy" @click="reload(false)">刷新</n-button>
+        <n-button quaternary @click="reload(false)">刷新</n-button>
       </div>
     </div>
     <MessageDownloadPanel ref="messagePanel" :active="true" />
@@ -137,10 +108,29 @@ h2 {
   justify-content: space-between;
   gap: 16px;
 }
+.toolbar-left {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  min-width: 0;
+}
 .toolbar-actions {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
+  align-items: center;
   gap: 8px;
   margin-left: auto;
+  flex-shrink: 0;
+}
+@media (max-width: 640px) {
+  .toolbar {
+    flex-wrap: wrap;
+  }
+  .toolbar-left {
+    width: 100%;
+  }
+  .toolbar-actions {
+    margin-left: 0;
+  }
 }
 </style>

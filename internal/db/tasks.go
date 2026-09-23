@@ -102,8 +102,10 @@ func sourcesForKind(kind string) []string {
 		return []string{"url"}
 	case "saved":
 		return []string{"saved_all", "watch_saved"}
+	case "channel_batch":
+		return []string{"chat_batch"}
 	case "channel":
-		return []string{"chat_continue", "chat_batch", "chat_range", "watch"}
+		return []string{"chat_continue", "chat_range", "watch"}
 	default:
 		return nil
 	}
@@ -237,6 +239,39 @@ func (d *DB) UpdateTaskProgress(ctx context.Context, id int64, doneFiles, totalF
 	_, err := d.SQL.ExecContext(ctx, `
 UPDATE tasks SET done_files=?, total_files=?, done_bytes=?, total_bytes=?, speed_bps=? WHERE id=?`,
 		doneFiles, totalFiles, doneBytes, totalBytes, speed, id)
+	return err
+}
+
+func (d *DB) UpdateTaskTitle(ctx context.Context, id int64, title string) error {
+	title = strings.TrimSpace(title)
+	if title == "" {
+		return nil
+	}
+	_, err := d.SQL.ExecContext(ctx, `UPDATE tasks SET title=? WHERE id=?`, title, id)
+	return err
+}
+
+func (d *DB) PatchTaskOptions(ctx context.Context, id int64, patch map[string]any) error {
+	if len(patch) == 0 {
+		return nil
+	}
+	t, err := d.GetTask(ctx, id)
+	if err != nil || t == nil {
+		return err
+	}
+	var opt map[string]any
+	_ = json.Unmarshal([]byte(t.OptionsJSON), &opt)
+	if opt == nil {
+		opt = map[string]any{}
+	}
+	for k, v := range patch {
+		opt[k] = v
+	}
+	b, err := json.Marshal(opt)
+	if err != nil {
+		return err
+	}
+	_, err = d.SQL.ExecContext(ctx, `UPDATE tasks SET options_json=? WHERE id=?`, string(b), id)
 	return err
 }
 

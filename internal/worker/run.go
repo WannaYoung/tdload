@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"tdload/internal/db"
 	"tdload/internal/progress"
@@ -113,29 +114,67 @@ func (w *Worker) runChatTask(ctx context.Context, task *db.Task) error {
 	toID, _ := optMap["toMessageId"].(float64)
 	watchID, _ := optMap["watchId"].(float64)
 	retryIDs := parseIntSlice(optMap["retryMessageIds"])
-	if chatID == 0 {
+	usernameHint := ""
+	if u, ok := optMap["username"].(string); ok {
+		usernameHint = strings.TrimPrefix(strings.TrimSpace(u), "@")
+	}
+	if chatID == 0 && usernameHint == "" {
 		return fmt.Errorf("任务缺少 chatId")
 	}
 
 	dialog, _ := w.DB.GetTGDialog(ctx, db.DefaultTGAccountID, int64(chatID))
-	username, title := "", ""
+	username := usernameHint
+	chatTitle := ""
+	if t, ok := optMap["chatTitle"].(string); ok {
+		chatTitle = strings.TrimSpace(t)
+	}
 	lastMsgID := 0
 	if dialog != nil {
-		username, title = dialog.Username, dialog.Title
+		if username == "" {
+			username = dialog.Username
+		}
+		if chatTitle == "" {
+			chatTitle = dialog.Title
+		}
 		lastMsgID = dialog.LastMessageID
 	}
-	if title == "" {
-		title = task.Title
+	if chatTitle == "" {
+		if label, _, ok := w.DB.GetChatLabel(ctx, int64(chatID)); ok {
+			chatTitle = label
+		}
 	}
 
 	dlOpt := w.channelDownloadOpts(task.ID)
+	if ct, ok := optMap["contentType"].(string); ok {
+		dlOpt.ContentType = tg.NormalizeContentType(ct)
+	}
+	fromMsg := int(fromID)
+	countMsg := int(count)
+	dlOpt.OnResolved = func(info tg.ChatInfo) {
+		_ = w.DB.UpsertChatLabel(context.Background(), info.ChatID, info.Title, info.Username)
+		patch := map[string]any{"chatId": info.ChatID}
+		if info.Username != "" {
+			patch["username"] = info.Username
+		}
+		if info.Title != "" {
+			patch["chatTitle"] = info.Title
+		}
+		_ = w.DB.PatchTaskOptions(context.Background(), task.ID, patch)
+		if task.Source == "chat_batch" && info.Title != "" && fromMsg > 0 && countMsg > 0 {
+			title := fmt.Sprintf("%s · #%d–#%d", info.Title, fromMsg, fromMsg+countMsg-1)
+			_ = w.DB.UpdateTaskTitle(context.Background(), task.ID, title)
+			w.Hub.Publish(progress.Event{
+				Type: "task_status", Kind: "channel", TaskID: task.ID, Status: task.Status, Title: title,
+			})
+		}
+	}
 
 	// 重试失败项：只下载指定 message id，不推进扫描水位、不继续往后扫
 	if len(retryIDs) > 0 {
 		params := tg.ChatDownloadParams{
 			ChatID:     int64(chatID),
 			Username:   username,
-			ChatTitle:  title,
+			ChatTitle:  chatTitle,
 			Mode:       "ids",
 			MessageIDs: retryIDs,
 			GroupAlbum: w.Cfg.GroupAlbum,
@@ -158,6 +197,7 @@ func (w *Worker) runChatTask(ctx context.Context, task *db.Task) error {
 		mode = "batch"
 		if task.Source == "watch" && count <= 0 && toID >= fromID && fromID > 0 {
 			count = toID - fromID + 1
+			countMsg = int(count)
 		}
 	}
 
@@ -168,9 +208,9 @@ func (w *Worker) runChatTask(ctx context.Context, task *db.Task) error {
 	params := tg.ChatDownloadParams{
 		ChatID:         int64(chatID),
 		Username:       username,
-		ChatTitle:      title,
-		FromMessageID:  int(fromID),
-		Count:          int(count),
+		ChatTitle:      chatTitle,
+		FromMessageID:  fromMsg,
+		Count:          countMsg,
 		Mode:           mode,
 		AfterMessageID: afterID,
 		LastMessageID:  lastMsgID,
@@ -181,17 +221,16 @@ func (w *Worker) runChatTask(ctx context.Context, task *db.Task) error {
 	if err != nil {
 		return err
 	}
-	// 仅历史补齐（频道下载）推进 chat_download_state；监听只推进 watched_chats，避免把扫描水位抬过未补完的历史。
-	// 文件去重仍共用 media_index，两边互相 skip_same。
-	if task.Source != "watch" {
+	// 仅「频道页续下」推进扫描水位；任务页 chat_batch / 监听不改频道水位，去重靠 media_index。
+	if task.Source == "chat_continue" {
 		if scanEnd > 0 {
 			_ = w.DB.UpsertChatDownloadState(ctx, db.DefaultTGAccountID, int64(chatID), scanEnd)
 		} else if maxID, e := w.DB.MaxTaskItemMessageID(ctx, task.ID); e == nil && maxID > 0 {
 			_ = w.DB.UpsertChatDownloadState(ctx, db.DefaultTGAccountID, int64(chatID), maxID)
 		}
-	}
-	if task.Source == "chat_continue" && int(count) > 0 {
-		_ = w.DB.SetChannelBatchSize(ctx, db.DefaultTGAccountID, int64(chatID), int(count))
+		if int(count) > 0 {
+			_ = w.DB.SetChannelBatchSize(ctx, db.DefaultTGAccountID, int64(chatID), int(count))
+		}
 	}
 	if task.Source == "watch" && watchID > 0 {
 		cursor := int(toID)
@@ -267,6 +306,9 @@ func (w *Worker) runWatchSavedTask(ctx context.Context, task *db.Task) error {
 		favID = tg.FavoritesChatID(selfID)
 	}
 	opt := w.downloadOpts(task.ID, tg.FavoritesFolderName, "saved")
+	if ct, ok := optMap["contentType"].(string); ok {
+		opt.ContentType = tg.NormalizeContentType(ct)
+	}
 	baseOnItem := opt.OnItem
 	opt.OnItem = func(cID int64, messageID int, status, fileName, localPath, errMsg string) {
 		if baseOnItem != nil {
