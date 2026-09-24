@@ -9,7 +9,7 @@ import {
   type GlobalThemeOverrides,
 } from "naive-ui";
 
-/** 深色 + 粉色高亮（对齐 xtools 布局，主色改为粉） */
+/** 深色 + 粉色高亮 */
 const themeOverrides: GlobalThemeOverrides = {
   common: {
     primaryColor: "#f472b6",

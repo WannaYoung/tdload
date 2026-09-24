@@ -12,6 +12,7 @@ import {
 } from "naive-ui";
 import {
   DocumentOutline,
+  DownloadOutline,
   ImageOutline,
   MusicalNotesOutline,
   TrashOutline,
@@ -212,7 +213,7 @@ const columns = computed<DataTableColumns<TaskItemRow>>(() => [
         NButton,
         {
           size: "tiny",
-          quaternary: true,
+          secondary: true,
           type: "error",
           title: "删除",
           onClick: () => void deleteItem(r.id),
@@ -248,6 +249,9 @@ defineExpose({
         class="composer-input"
       />
       <n-button type="primary" :loading="submitting" :disabled="!text.trim()" @click="createTask">
+        <template #icon>
+          <n-icon :component="DownloadOutline" />
+        </template>
         下载
       </n-button>
     </div>
@@ -255,13 +259,13 @@ defineExpose({
       <span>共 {{ total }} 条消息，{{ doneCount }} 条已下载</span>
       <n-button
         size="small"
-        type="primary"
+        type="error"
         secondary
         :loading="clearing"
         :disabled="doneCount <= 0"
         @click="clearCompleted"
       >
-        清除已完成
+        清除完成
       </n-button>
     </div>
     <div class="table-wrap message-table">
@@ -303,11 +307,16 @@ defineExpose({
 }
 .composer.row {
   flex-direction: row;
+  flex-wrap: nowrap;
   align-items: flex-start;
 }
 .composer-input {
   flex: 1 1 auto;
   min-width: 0;
+}
+.composer.row > .n-button {
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 .list-meta {
   display: flex;
@@ -325,13 +334,5 @@ defineExpose({
 }
 .pager {
   flex-shrink: 0;
-}
-@media (max-width: 1000px) {
-  .composer.row {
-    flex-direction: column;
-  }
-  .composer.row > .n-button {
-    align-self: flex-end;
-  }
 }
 </style>

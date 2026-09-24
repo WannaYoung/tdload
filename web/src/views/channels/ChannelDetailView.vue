@@ -6,6 +6,7 @@ import {
   NCollapse,
   NCollapseItem,
   NEmpty,
+  NIcon,
   NInputNumber,
   NModal,
   NProgress,
@@ -14,6 +15,17 @@ import {
   useDialog,
   useMessage,
 } from "naive-ui";
+import {
+  CloseOutline,
+  DownloadOutline,
+  PauseOutline,
+  PlayOutline,
+  PulseOutline,
+  RefreshOutline,
+  ReloadOutline,
+  SyncOutline,
+  TrashOutline,
+} from "@vicons/ionicons5";
 import { api } from "../../api/http";
 import type { ChannelDownloadInfo, ItemCounts } from "../../api/types";
 import { useAppEvents } from "../../composables/useAppEvents";
@@ -429,16 +441,24 @@ onUnmounted(() => {
         <p v-if="info?.username" class="sub">@{{ info.username }}</p>
       </div>
       <div class="head-actions">
+        <n-button :loading="loading" @click="() => load()">
+          <template #icon>
+            <n-icon :component="RefreshOutline" />
+          </template>
+          刷新
+        </n-button>
         <n-button
           v-if="isCustom"
-          secondary
           type="error"
+          secondary
           :loading="deleting"
           @click="confirmDelete"
         >
+          <template #icon>
+            <n-icon :component="TrashOutline" />
+          </template>
           删除
         </n-button>
-        <n-button secondary :loading="loading" @click="() => load()">刷新</n-button>
       </div>
     </header>
 
@@ -465,13 +485,21 @@ onUnmounted(() => {
               <span>每批条数</span>
               <n-input-number v-model:value="batchSize" :min="50" :max="5000" :step="50" size="small" />
             </div>
-            <n-button secondary @click="openCursorModal">调整水位</n-button>
+            <n-button @click="openCursorModal">
+              <template #icon>
+                <n-icon :component="PulseOutline" />
+              </template>
+              调整水位
+            </n-button>
             <n-button
               type="primary"
-              secondary
+              ghost
               :loading="cursorSaving"
               @click="alignCursor"
             >
+              <template #icon>
+                <n-icon :component="SyncOutline" />
+              </template>
               对齐水位
             </n-button>
             <n-button
@@ -480,7 +508,10 @@ onUnmounted(() => {
               :disabled="!!info.activeTask || info.caughtUp"
               @click="continueDownload"
             >
-              {{ info.caughtUp ? "已追平最新" : info.activeTask ? "下载进行中" : "继续下载" }}
+              <template #icon>
+                <n-icon :component="DownloadOutline" />
+              </template>
+              {{ info.caughtUp ? "已追平最新" : info.activeTask ? "下载中" : "继续下载" }}
             </n-button>
           </div>
         </section>
@@ -526,37 +557,50 @@ onUnmounted(() => {
                 <n-button
                   v-if="info.activeTask.status === 'running' || info.activeTask.status === 'queued'"
                   size="small"
-                  secondary
+                  ghost
                   type="warning"
                   @click="pause(info.activeTask.id)"
                 >
+                  <template #icon>
+                    <n-icon :component="PauseOutline" />
+                  </template>
                   暂停
                 </n-button>
                 <n-button
                   v-if="info.activeTask.status === 'paused'"
                   size="small"
                   type="primary"
+                  ghost
                   @click="resume(info.activeTask.id)"
                 >
+                  <template #icon>
+                    <n-icon :component="PlayOutline" />
+                  </template>
                   继续
                 </n-button>
                 <n-button
                   v-if="info.activeTask.status !== 'cancelled' && info.activeTask.status !== 'done'"
                   size="small"
-                  secondary
+                  ghost
                   type="error"
                   @click="cancel(info.activeTask.id)"
                 >
+                  <template #icon>
+                    <n-icon :component="CloseOutline" />
+                  </template>
                   取消
                 </n-button>
                 <n-button
                   v-if="hasFailedItems(info.activeTask)"
                   size="small"
-                  secondary
+                  ghost
                   type="warning"
                   @click="retryFailed(info.activeTask.id)"
                 >
-                  重试失败
+                  <template #icon>
+                    <n-icon :component="ReloadOutline" />
+                  </template>
+                  重试
                 </n-button>
               </div>
             </div>
@@ -571,13 +615,13 @@ onUnmounted(() => {
               <template #header-extra>
                 <n-button
                   size="small"
-                  type="primary"
+                  type="error"
                   secondary
                   :loading="clearing"
                   :disabled="completedBatchCount <= 0"
                   @click="clearCompletedBatches"
                 >
-                  清除已完成
+                  清除完成
                 </n-button>
               </template>
               <n-empty
@@ -609,7 +653,12 @@ onUnmounted(() => {
                     </span>
                   </div>
                   <div v-if="hasFailedItems(t)" class="batch-actions">
-                    <n-button size="tiny" secondary type="warning" @click="retryFailed(t.id)">重试失败</n-button>
+                    <n-button size="tiny" ghost type="warning" @click="retryFailed(t.id)">
+                      <template #icon>
+                        <n-icon :component="ReloadOutline" />
+                      </template>
+                      重试
+                    </n-button>
                   </div>
                 </div>
               </div>
@@ -661,8 +710,10 @@ onUnmounted(() => {
 }
 .head-actions {
   display: flex;
+  flex-wrap: nowrap;
   align-items: flex-start;
   gap: 8px;
+  flex-shrink: 0;
 }
 .sub {
   margin: 4px 0 0;

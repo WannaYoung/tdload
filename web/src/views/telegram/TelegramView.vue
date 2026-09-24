@@ -6,11 +6,13 @@ import {
   NCard,
   NForm,
   NFormItem,
+  NIcon,
   NInput,
   NSpin,
   useDialog,
   useMessage,
 } from "naive-ui";
+import { RefreshOutline, SyncOutline } from "@vicons/ionicons5";
 import { api } from "../../api/http";
 import type { TgStatus, TGSummary } from "../../api/types";
 
@@ -164,7 +166,12 @@ onMounted(() => void load());
       <div>
         <h2>Telegram</h2>
       </div>
-      <n-button secondary :loading="loading" @click="load">刷新</n-button>
+      <n-button :loading="loading" @click="load">
+        <template #icon>
+          <n-icon :component="RefreshOutline" />
+        </template>
+        刷新
+      </n-button>
     </header>
 
     <n-spin :show="loading">
@@ -223,7 +230,10 @@ onMounted(() => void load());
             </div>
           </div>
           <n-button type="primary" size="small" :loading="syncing" @click="syncAll">
-            同步收藏/对话
+            <template #icon>
+              <n-icon :component="SyncOutline" />
+            </template>
+            同步
           </n-button>
         </div>
       </n-card>

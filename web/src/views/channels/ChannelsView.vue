@@ -5,6 +5,7 @@ import {
   NButton,
   NDataTable,
   NEmpty,
+  NIcon,
   NInput,
   NModal,
   NSpin,
@@ -12,6 +13,7 @@ import {
   useMessage,
   type DataTableColumns,
 } from "naive-ui";
+import { AddOutline, DownloadOutline, RefreshOutline, SyncOutline } from "@vicons/ionicons5";
 import { api } from "../../api/http";
 import type { ChannelRow } from "../../api/types";
 import ChannelCoverageBar from "./components/ChannelCoverageBar.vue";
@@ -175,7 +177,7 @@ const columns = computed<DataTableColumns<ChannelRow>>(() => [
   {
     title: "操作",
     key: "actions",
-    width: 148,
+    width: 112,
     align: "right",
     render: (r) =>
       h("div", { class: "row-actions" }, [
@@ -183,24 +185,27 @@ const columns = computed<DataTableColumns<ChannelRow>>(() => [
           NButton,
           {
             size: "small",
-            secondary: true,
+            class: "icon-square",
             loading: syncingId.value === r.chatId,
+            title: "同步",
             onClick: (e: MouseEvent) => {
               e.stopPropagation();
               void syncChannel(r);
             },
           },
-          { default: () => "同步" },
+          { icon: () => h(NIcon, { component: SyncOutline }) },
         ),
         h(
           NButton,
           {
             size: "small",
+            class: "icon-square",
             type: "primary",
-            secondary: true,
+            ghost: true,
+            title: "下载",
             onClick: () => openDetail(r),
           },
-          { default: () => "下载" },
+          { icon: () => h(NIcon, { component: DownloadOutline }) },
         ),
       ]),
   },
@@ -231,8 +236,18 @@ onMounted(() => void load());
         <h2>频道</h2>
       </div>
       <div class="head-actions">
-        <n-button type="primary" secondary @click="openAddModal">新增</n-button>
-        <n-button secondary :loading="loading" @click="load">刷新</n-button>
+        <n-button :loading="loading" @click="load">
+          <template #icon>
+            <n-icon :component="RefreshOutline" />
+          </template>
+          刷新
+        </n-button>
+        <n-button type="primary" @click="openAddModal">
+          <template #icon>
+            <n-icon :component="AddOutline" />
+          </template>
+          新增
+        </n-button>
       </div>
     </header>
     <n-spin :show="loading">
@@ -283,8 +298,10 @@ onMounted(() => void load());
 }
 .head-actions {
   display: flex;
+  flex-wrap: nowrap;
   align-items: center;
   gap: 8px;
+  flex-shrink: 0;
 }
 .pager {
   display: flex;
@@ -329,6 +346,17 @@ onMounted(() => void load());
   display: inline-flex;
   align-items: center;
   justify-content: flex-end;
-  gap: 6px;
+  gap: 12px;
+}
+:deep(.icon-square) {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+}
+:deep(.icon-square .n-button__icon) {
+  margin: 0;
+}
+:deep(.icon-square .n-icon) {
+  font-size: 18px;
 }
 </style>

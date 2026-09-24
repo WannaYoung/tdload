@@ -1,6 +1,6 @@
 # tdload 开发文档
 
-自托管 Telegram 批量下载与监控控制台。后端 Go 单体集成 [iyear/tdl](https://github.com/iyear/tdl)（`tdl/core` + `gotd`），前端 Vue 控制台；Docker 部署到 amd64 / arm64 Linux。仓库内 `xtools/` 仅作产品与部署参考，不进入运行时依赖。
+自托管 Telegram 批量下载与监控控制台。后端 Go 单体集成 [iyear/tdl](https://github.com/iyear/tdl)（`tdl/core` + `gotd`），前端 Vue 控制台；Docker 部署到 amd64 / arm64 Linux。
 
 许可证：**AGPL-3.0**（与 tdl 一致）。
 
@@ -8,7 +8,6 @@
 
 - [tdl 官方文档](https://docs.iyear.me/tdl/)
 - [tdl 下载指南](https://docs.iyear.me/tdl/guide/download/)
-- 参考样板：[xtools/README.md](../xtools/README.md)
 
 ---
 
@@ -24,9 +23,9 @@
 | **Telegram 页** | 登录 / 退出；**同步**已加入频道·群组·收藏缓存，并刷新自定义频道元数据；展示 **频道（对话）数**、**收藏数** |
 | **收藏页** | 整库同步到 `我的收藏/`；无扫描水位，只补缺失（`skip_same`） |
 | **频道页** | 已加入对话 + 自定义频道；覆盖进度、同步最新、继续下载；可调扫描水位；失败重试仅 ids、不推进水位 |
-| **任务页** | 消息链接入队（仅 `source=url`）；刷新 / 清除已完成 / 删除单项（无全部暂停/开始） |
-| **资源库** | 已下载索引、筛选、预览；扫盘只维护索引，**不改水位** |
-| **监听** | 频道 / 群 / 收藏 / 自定义频道增量入队；内容类型筛选（全部 / 媒体 / 图片 / 视频）；添加前同步最新消息 ID |
+| **任务页** | 消息链接入队（仅 `source=url`）；刷新 / 清除完成 / 删除单项 |
+| **资源库** | 已下载索引、筛选、缩略图 / 视频封面；扫盘只维护索引，**不改水位** |
+| **监听** | 频道 / 群 / 收藏 / 自定义频道增量入队；内容类型筛选；添加前同步最新消息 ID |
 | 部署 | 单镜像 Docker，`linux/amd64` / `linux/arm64`；本机前后端分离调试 |
 
 **落盘目录（相对 `download_dir`）：**
@@ -34,16 +33,9 @@
 - 收藏：`我的收藏/`
 - 其它消息：`{频道id}-{频道名称}/`（与 Worker `chatFolderName` 一致；名称需安全化）
 
-### 1.2 分期
+### 1.2 范围外
 
-| 阶段 | 内容 | 状态 |
-|------|------|------|
-| **一期** | 对话/收藏同步 + 频道工作台 + 消息任务 + 收藏同步 + 队列/SSE + 资源库 | ✅ |
-| **二期** | 监听增量自动入队（复用同一任务模型与去重） | ✅（M5） |
-
-### 1.3 一期非目标
-
-上传、转发、多用户、桌面端、内置 MySQL。
+上传、转发、多用户、桌面端、内置 MySQL；二维码登录与 JSON 导出入队未做。
 
 ---
 
@@ -53,11 +45,10 @@
 |----|------|
 | 后端 | Go 单体：HTTP API + Worker + Watcher，单二进制 |
 | Telegram | `github.com/iyear/tdl/core` + `gotd`；下载对齐 tdl `pkg/downloader` 的 Iter / Progress |
-| 前端 | Vue 3 + Vite + Naive UI + Pinia + Vue Router（布局对齐 xtools；深色 + 粉主色 `#f472b6`） |
+| 前端 | Vue 3 + Vite + Naive UI + Pinia + Vue Router（深色 + 粉主色 `#f472b6`） |
 | 数据库 | SQLite（文件落在配置卷，单容器友好） |
-| 配置 | YAML 运行时配置 + 环境变量机密（对齐 xtools） |
+| 配置 | YAML 运行时配置 + 环境变量机密 |
 | 鉴权 | 单用户 JWT Bearer；媒体流可用短时 ticket（勿把会话 JWT 放进 URL） |
-| 参考代码 | `xtools/` 只读参考，禁止 `import` / 拷贝进构建依赖 |
 | 开源 | 整仓 AGPL-3.0 |
 
 ---
@@ -109,7 +100,6 @@ flowchart LR
 
 ```
 tdload/
-├── xtools/                      # 参考样板（勿依赖）
 ├── docs/
 │   └── DEVELOPMENT.md           # 本文档
 ├── cmd/
@@ -158,8 +148,8 @@ session_dir: "./config/session"
 app_id: 2040
 app_hash: "b18441a1ff607e10a989891a5462e627"
 
-threads: 8          # 单任务分片线程 -t
-concurrency: 4      # 并发任务数 -l
+threads: 8          # 单文件分片线程（tdl -t，上限 32）
+concurrency: 4      # 同任务并行文件数（tdl -l，上限 16）
 skip_same: true     # --skip-same
 group_album: true   # --group
 rewrite_ext: false  # --rewrite-ext
@@ -220,7 +210,7 @@ SQLite。迁移用编号 SQL 或轻量迁移库（如 `golang-migrate` / 自研 
 | last_error | TEXT | |
 | created_at / updated_at | TEXT | |
 
-一期可先支持单账号；表结构预留多账号。
+单用户：仅支持一个管理员账号。表结构预留多账号字段。
 
 ### 6.3 `tasks`
 
@@ -295,7 +285,7 @@ SQLite。迁移用编号 SQL 或轻量迁移库（如 `golang-migrate` / 自研 
 | last_run_at / next_run_at | TEXT | 上次 / 下次调度 |
 | created_at / updated_at | TEXT | |
 
-### 6.8 `tg_dialogs`（一期 · 缓存）
+### 6.8 `tg_dialogs`（对话缓存）
 
 Telegram 页同步已加入对话后写入；自定义频道单独插入，`is_custom=1`，同步已加入列表时不会被删掉。若用户后来加入该频道，UPSERT 会合并并清掉自定义标记。
 
@@ -315,7 +305,7 @@ Telegram 页同步已加入对话后写入；自定义频道单独插入，`is_c
 
 唯一约束：`(tg_account_id, chat_id)`。列表排序：`is_custom ASC, title`（自定义排在已加入之后）。
 
-### 6.9 `saved_messages_cache`（一期 · 收藏）
+### 6.9 `saved_messages_cache`（收藏缓存）
 
 | 列 | 类型 | 说明 |
 |----|------|------|
@@ -327,7 +317,7 @@ Telegram 页同步已加入对话后写入；自定义频道单独插入，`is_c
 
 唯一约束：`(tg_account_id, message_id)`。收藏总数 = 行数；已下载数 = 与 `media_index`（收藏专用 `chat_id` 约定，见 §7.2）交集。
 
-### 6.10 `chat_download_state`（一期 · 可选）
+### 6.10 `chat_download_state`（频道下载水位）
 
 按对话记录批量下载扫描水位，便于频道详情「继续下载」与列表覆盖进度。
 
@@ -353,99 +343,95 @@ Telegram 页同步已加入对话后写入；自定义频道单独插入，`is_c
 
 ---
 
-## 7. Web 功能分期
+## 7. Web 控制台
 
-布局对齐 xtools（深色 + 粉主色 `#f472b6`、宽侧栏 / 窄屏顶栏下拉）；SSE 进度 + 任务列表轮询兜底；设置写回 YAML。侧栏活跃任务数按 kind 分徽标（消息 / 收藏 / 频道），5s 轮询 `GET /api/dashboard`。
+布局：深色 + 粉主色 `#f472b6`、宽侧栏 / 窄屏顶栏下拉；SSE 进度 + 轮询兜底；设置写回 YAML。侧栏活跃任务数按 kind 分徽标（消息 / 收藏 / 频道），约 5s 轮询 `GET /api/dashboard`。
 
-### 7.1 侧栏导航（目标态）
+### 7.1 侧栏与路由
 
-**当前侧栏：** 仪表盘 · Telegram · **收藏** · **频道** · 任务 · 监听 · **资源库** · 设置
+**侧栏：** 仪表盘 · Telegram · 收藏 · 频道 · 任务 · 监听 · 资源库 · 设置
 
 | 路由名 | 页面 | 说明 |
 |--------|------|------|
-| `dashboard` | 仪表盘 | 队列 / 磁盘 / TG 摘要 |
-| `telegram` | Telegram | 登录 + **同步** + 计数 |
-| `saved` | 收藏 | 收藏同步（补缺失） |
+| `dashboard` | 仪表盘 | 队列 / 磁盘 / TG 摘要；失败分入口 |
+| `telegram` | Telegram | 登录 + 同步 + 计数 |
+| `saved` | 收藏 | 收藏整库同步（补缺失） |
 | `channels` | 频道 | 已加入 + 自定义；覆盖进度；新增 / 同步 / 下载 |
-| `channel-detail` | 频道详情 | 覆盖进度 +「继续下载」+ 水位调整；自定义可删除 |
-| `tasks` | 任务 | 消息链接下载（仅 message） |
+| `channel-detail` | 频道详情 | 覆盖进度、继续下载、水位调整 / 对齐；自定义可删除 |
+| `tasks` | 任务 | 消息链接下载 |
 | `watch` | 监听 | 增量自动入队；内容类型筛选 |
 | `library` | 资源库 | 索引浏览、筛选、预览、扫盘 |
 | `settings` | 设置 | 下载参数、目录、proxy、监听间隔等 |
 
-兼容：`/tasks?tab=saved` → `/saved`；`/tasks?tab=channel` → `/channels`。
+兼容旧链接：`/tasks?tab=saved` → `/saved`；`/tasks?tab=channel` → `/channels`。
 
-### 7.2 各页能力（详细）
+### 7.2 各页能力
 
 **Telegram**
 
-- 配置 / 登录：验证码、2FA、退出 Telegram（无二维码登录）
-- **同步**：拉取可访问 **频道 + 群组** 写入 `tg_dialogs`（只替换 `is_custom=0`）；拉取 **Saved Messages** 写入 `saved_messages_cache`；随后刷新自定义频道标题 / 最新消息（`messages.getPeerDialogs`，不走 takeout / getHistory）
-- 展示：**频道（含群与自定义）数**、**收藏数**；上次同步时间；失败原因
+- 登录：验证码、2FA、退出（无二维码登录）
+- **同步**：拉取可访问频道 / 群组 → `tg_dialogs`（只替换 `is_custom=0`）；拉取 Saved Messages → `saved_messages_cache`；刷新自定义频道标题 / 最新消息（`messages.getPeerDialogs`）
+- 展示：频道（含群与自定义）数、收藏数、上次同步时间
 
 **收藏**
 
-- 入队：「开始同步」→ `source=saved_all`；落盘 `{download_dir}/我的收藏/`
-- **先拉后下**：任务启动后先拉取最新收藏列表（`phase=listing`，刷新「收藏数」，「已同步」为 —），再按缓存全量下载（`phase=downloading`）
-- **无扫描水位**：靠 `skip_same` + `media_index` / 磁盘跳过已有
-- 列表：同步记录（收藏数 / 已同步 / 失败 / 时间）；「清除完成」；单项可停止并删除
-- 工具栏：**刷新 / 清除完成 / 开始同步**（有进行中同步时禁用开始）；**无**全部暂停/开始
-- 分页：`GET /api/tasks?kind=saved`；SSE 经共享 `useAppEvents`
+- 工具栏：**刷新 / 清除 / 同步**（有进行中同步时禁用同步）
+- 入队：`source=saved_all`；落盘 `{download_dir}/我的收藏/`
+- **先拉后下**：`phase=listing` 刷新收藏数 → `phase=downloading` 全量补缺
+- **无扫描水位**：`skip_same` + `media_index` / 磁盘去重
+- 列表：收藏数 / 已同步 / 失败 / 时间；单项可停止并删除
+- 分页：`GET /api/tasks?kind=saved`；SSE 经 `useAppEvents`
 
 **频道**
 
-- 列表：标题、`@username`、**类型**（频道粉 / 自定义绿 / 超级群蓝 / 群组黄）、**覆盖进度**、已下载数、状态
-- 工具栏：**新增**（`@名称` 或频道 ID）+ **刷新**；操作列：**同步**（最新消息）+ **下载**
-- 新增：解析公开频道/群；去重（chat id / 用户名）；未加入的私有频道、无权限会报中文错误；写入 `is_custom=1`，排在已加入之后
-- 详情工作台：覆盖进度条、每批条数（`chat_download_state.batch_size`，默认 **100**）、「继续下载」
-- **扫描水位**：`POST /api/channels/{chatId}/scan-cursor`，`mode=set` 或 `mode=align`
-- 进行中批次可暂停 / 继续 / 取消；**重试失败** → `Mode=ids`，不推进扫描水位；可清除已完成批次
-- 自定义频道详情：**删除**（仅 `is_custom=1`）后回列表
-- 同频道同时只跑一批；继续下载与水位逻辑对已加入 / 自定义一致
+- 列表：标题、`@username`、类型标签、覆盖进度、已下载数、状态
+- 工具栏：**刷新 / 新增**；操作列图标：**同步**（最新消息）、**下载**（进详情）
+- 新增：`@名称` 或频道 ID；去重；无权限报中文错误；`is_custom=1`
+- 详情：覆盖进度、每批条数（默认 100）、**调整水位 / 对齐水位 / 继续下载**
+- 水位 API：`POST /api/channels/{chatId}/scan-cursor`，`mode=set` 或 `mode=align`
+- 进行中批次：暂停 / 继续 / 取消 / 重试（`Mode=ids`，不推进水位）；可清除完成批次
+- 自定义频道可删除；同频道同时只跑一批
 - 监听水位与频道扫描水位分离；去重共用 `media_index`
 
 **任务（消息下载）**
 
-- 仅消息链接：多行粘贴 `t.me/...` → `source=url`（控制台已移除「频道下载」Tab）
-- **列表：每条消息一行**（频道、消息 ID、文件名、类型、状态）；分页 `pageSize=50`
-- 顶部：**刷新**（无全部暂停 / 全部开始）
-- 操作：删除单项、「清除已完成」；SSE + 轮询兜底
-- `POST /api/tasks/pause-all`、`start-all` 与 `source=chat_batch` 仍保留在 API，控制台不再提供入口
+- 多行粘贴 `t.me/...` → `source=url`
+- 列表：每条消息一行（频道、消息 ID、文件名、类型、状态）；分页 `pageSize=50`
+- 工具栏：**刷新**；列表旁：**清除完成**；单项删除
+- SSE + 轮询兜底
 
 **资源库**
 
-- **频道筛选**：顶栏下拉；选项第一项固定 **「我的收藏」**，其余为频道/群
-- **媒体类型筛选**：全部 / **图片** / **视频**
-- **预览**：列表缩略图 / 视频封面（`GET /api/library/{id}/thumb`）；点击浏览页加载原文件（`/file`，视频 Range）
-- 分页、本地路径、删索引（可选删文件）
-- **扫盘补索引**：只维护 `media_index`（增删失效项）；API 返回 `cursorsUpdated` **恒为 0**，**不改** `chat_download_state` / 收藏水位
+- 频道筛选：第一项固定「我的收藏」，其余为频道 / 群
+- 媒体类型：全部 / 图片 / 视频
+- 预览：列表缩略图 / 视频封面（`GET /api/library/{id}/thumb`，视频需 ffmpeg）；点击加载原文件（`/file`，视频 Range）
+- 扫盘补索引：只维护 `media_index`；**不改**水位；`cursorsUpdated` 恒为 0
 
 **监听**
 
-- 设置：`watch_interval_minutes`（默认 30，范围 10–300）
-- 下拉：已加入 + 自定义频道 +「我的收藏」（已监听排除）；选项只显示标题 + 类型标签（收藏粉 / 自定义绿 / 频道粉 / 超级群蓝 / 群组黄），不带 `@用户名`
-- 添加时可选手内容类型：全部 / 媒体 / 图片 / 视频；添加前同步该频道最新消息 ID 作为水位，**不立刻下载**
-- 列表：频道（带类型标签）、内容类型、已下载、最新消息、上次运行、下次运行；「我的收藏」置顶
-- 到期后下载 `(水位, 最新]`（含端点），按内容类型过滤附件，`skip_same` 去重；成功后推进监听水位
-- **无**扩展名黑白名单、最小大小、关键词过滤
+- 间隔：`watch_interval_minutes`（默认 30，范围 10–300）
+- 候选：已加入 + 自定义 +「我的收藏」（已监听排除）
+- 内容类型：全部 / 媒体 / 图片 / 视频；添加前同步最新消息 ID 为水位，不立刻下载
+- 到期下载 `(水位, 最新]`，`skip_same` 去重后推进监听水位
 - 任务 source：`watch` / `watch_saved`
 
-### 7.3 当前实现与目标差距
+### 7.3 能力一览
 
-| 目标 | 现状 |
+| 能力 | 状态 |
 |------|------|
 | 侧栏：收藏 / 频道 / 任务 / 监听 / 资源库 | ✅ |
-| Telegram 刷新 + 计数 | ✅ |
-| 频道列表 + 自定义频道 + 同步 / 继续下载 + 水位调整 | ✅ |
-| 任务页仅消息下载 | ✅（无频道下载 Tab；收藏独立为 `/saved`） |
-| 收藏同步 + `我的收藏/`（补缺失、无水位） | ✅ |
+| Telegram 同步 + 计数 | ✅ |
+| 频道列表 + 自定义 + 同步 / 继续下载 + 水位 | ✅ |
+| 任务页消息链接下载 | ✅ |
+| 收藏同步 + `我的收藏/` | ✅ |
 | 跳过已下载 | ✅ |
-| 资源库筛选 / 预览 / 扫盘（不改水位） | ✅ |
-| 监听增量入队 + 内容类型筛选 + 自定义频道 | ✅ |
+| 资源库筛选 / 缩略图 / 扫盘 | ✅ |
+| 监听增量入队 + 内容类型 | ✅ |
 | Takeout / rewrite_ext | ✅ |
 | 关于（AGPL） | ✅ |
-| Docker 多架构镜像 | ✅（`wannayoung/tdload`，BIND `3080`） |
-| JSON 导出入队、二维码登录、任务日志 API、资源库搜索框等 | 可选后续 |
+| Docker 多架构镜像（BIND `3080`） | ✅ |
+
+可选后续：二维码登录、JSON 导出入队、任务日志 API、资源库关键词搜索 UI。
 
 ### 7.4 前端目录
 
@@ -491,8 +477,8 @@ web/
 | GET | `/api/tg/status` | 会话是否有效 | 已实现 |
 | POST | `/api/tg/login/send_code` | 手机号发验证码 | 已实现 |
 | POST | `/api/tg/login/sign_in` | 验证码 / 2FA | 已实现 |
-| POST | `/api/tg/login/qr/start` | 返回 QR payload | 待定（可选） |
-| GET | `/api/tg/login/qr/poll` | 轮询扫码结果 | 待定（可选） |
+| POST | `/api/tg/login/qr/start` | 二维码登录（未实现） | — |
+| GET | `/api/tg/login/qr/poll` | 二维码轮询（未实现） | — |
 | POST | `/api/tg/logout` | 清除 session | 已实现 |
 | POST | `/api/tg/credentials/desktop` | 写入 Desktop 公开 API 凭证 | 已实现 |
 | POST | `/api/tg/sync/dialogs` | 刷新频道·群组 → `tg_dialogs` | 已实现（经 `/api/tg/sync`） |
@@ -516,13 +502,13 @@ web/
 | POST | `/api/channels/{chatId}/scan-cursor` | body `{ mode: "set", messageId }` 或 `{ mode: "align" }`：调整扫描水位 | 已实现 |
 | DELETE | `/api/channels/{chatId}/batches/completed` | 清除该频道已结束续下批次 | 已实现 |
 
-### 8.4 任务（一期）
+### 8.4 任务
 
 | 方法 | 路径 | 说明 | 状态 |
 |------|------|------|------|
 | GET | `/api/tasks` | 分页；**`kind`** 见下 | 已实现 |
 | POST | `/api/tasks` | 创建（见下方 `source`） | 已实现（url / saved_all / chat_*） |
-| POST | `/api/tasks/batch` | 批量 URL / JSON | 待定 |
+| POST | `/api/tasks/batch` | 批量 URL / JSON | 未实现 |
 | GET | `/api/tasks/{id}` | 详情；频道类返回 **聚合 counts**，不含 items 全量 | 已实现 |
 | GET | `/api/tasks/{id}/items` | **仅 message/saved** 任务：单条 item 分页，默认 `pageSize=50` | 已实现 |
 | POST | `/api/tasks/{id}/pause` | 暂停 | 已实现 |
@@ -534,7 +520,7 @@ web/
 | POST | `/api/tasks/pause-all` | | 已实现 |
 | POST | `/api/tasks/start-all` | | 已实现 |
 | DELETE | `/api/tasks/completed` | 清理已结束任务；可选 `?kind=saved` | 已实现 |
-| GET | `/api/tasks/{id}/logs` | 日志 | 待定 |
+| GET | `/api/tasks/{id}/logs` | 任务日志 | 未实现 |
 
 **`GET /api/tasks` 查询：**
 
@@ -573,7 +559,7 @@ message/saved 列表项可带 `itemsPreview`（当前页关联 items）或前端
 | source | 入口 | 说明 |
 |--------|------|------|
 | `url` | 任务 · 消息下载 | 多行 `t.me` 链接 |
-| `saved_all` | 收藏页 · 开始同步 | 缓存全量 message id，`skip_same` 跳过已有；`out_subdir`: `我的收藏` |
+| `saved_all` | 收藏页 · 同步 | 缓存全量 message id，`skip_same` 跳过已有；`out_subdir`: `我的收藏` |
 | `chat_continue` | 频道详情 · 继续下载 | 指定 `chat_id` + `count`，从水位向前扫 |
 | `chat_batch` | （API 仍支持，控制台无入口） | `chat_id` + `from_message_id` + `count` |
 | `json` | （可选后续） | 导出 JSON |
@@ -625,7 +611,6 @@ message/saved 列表项可带 `itemsPreview`（当前页关联 items）或前端
 | DELETE | `/api/library/{id}` | 删索引（query: `delete_file=1`） | 已实现 |
 | GET | `/api/library/{id}/file` | 原文件流；浏览页原图 / 视频 Range 播放 | 已实现 |
 | GET | `/api/library/{id}/thumb` | 列表缩略图（图片缩放；视频 ffmpeg 封面，可缓存） | 已实现 |
-| GET | `/api/library/{id}/thumb` | 可选：视频首帧 / 大图缩略（无则 404，前端用 mime 图标兜底） | 待定 |
 | GET | `/api/about` | 版本号、许可证、源码链接（AGPL） | 已实现 |
 
 **`GET /api/library` query：**
@@ -669,7 +654,7 @@ message/saved 列表项可带 `itemsPreview`（当前页关联 items）或前端
 }
 ```
 
-**单条级（仅 message / saved Tab 订阅）：**
+**单条级（消息任务进度）：**
 
 ```json
 {
@@ -742,7 +727,7 @@ JSON：Telegram Desktop 导出或 tdl export 的消息 JSON。
 
 - 捕获 flood wait：按服务器要求 sleep，任务保持 `running`，日志打 warn
 - **大批量下载**可走 takeout（配置项默认开启）；**解析 / 新增 / 同步频道**只用普通 API + `messages.getPeerDialogs`，禁止为此申请 takeout 或扫全量 `getHistory`
-- `concurrency` 默认不宜过高；设置页可调
+- `concurrency` 默认不宜过高（同任务并行文件数，上限 16）；设置页可调
 - 可恢复错误自动重试；不可恢复标 `failed`
 - 暂停：cancel 当前任务 context，items 未完成保持可续传
 
@@ -755,13 +740,13 @@ JSON：Telegram Desktop 导出或 tdl export 的消息 JSON。
 
 ## 10. Worker 设计
 
-对齐 xtools worker 思路（进程内队列、槽位、超时、drain）：
+进程内队列、槽位、超时、drain：
 
 - 启动：扫描 `queued` / 异常中断的 `running` → 重新入队
 - 槽位：`concurrency`（配置项），硬上限防止误配
 - 单任务超时：可配置，默认 4h
 - 关机：`CancellationToken` / `context` cancel → drain 30s → 强制 abort
-- 每账号可绑独立 proxy（二期多账号时按 lane 隔离）
+- 账号可绑独立 proxy（多账号场景按 lane 隔离；当前为单账号）
 
 伪代码：
 
@@ -882,6 +867,8 @@ WEB_DIR=/app/web
 docker buildx create --use --name tdload-builder || true
 docker buildx build \
   --platform linux/amd64,linux/arm64 \
+  --build-arg VERSION=0.1.5 \
+  -t wannayoung/tdload:0.1.5 \
   -t wannayoung/tdload:latest \
   --push .
 ```
@@ -937,115 +924,23 @@ services:
 
 ---
 
-## 15. 实现里程碑
+## 15. 模块一览
 
-按依赖顺序推进；每阶段可独立演示。  
-**进度同步：** 下文 checkbox 随实现勾选；前端壳与主题已在 M0/M3 交叉推进。
+| 模块 | 职责 |
+|------|------|
+| `cmd/tdload` + `internal/config` | 启动、YAML / env、目录 |
+| `internal/db` | SQLite schema |
+| `internal/auth` | JWT / ticket / 管理员引导 |
+| `internal/api` | REST 路由 |
+| `internal/static` | SPA 静态托管 |
+| `internal/tg` | 登录、同步、下载（含并行文件）、自定义频道 |
+| `internal/worker` + `progress` | 任务调度与 SSE |
+| `internal/watcher` | 监听增量入队 + 内容类型 |
+| `internal/library` | 扫盘索引、缩略图 / 视频封面 |
+| `web` | Vue 控制台（深色 + 粉主色、宽窄屏布局） |
+| Docker | 多架构镜像 `wannayoung/tdload`，BIND `3080`；含 ffmpeg |
 
-### 模块与页面总览（对照实现）
-
-| 模块 | 职责 | 状态 |
-|------|------|------|
-| `cmd/tdload` + `internal/config` | 启动、YAML/env、目录 | 已完成 |
-| `internal/db` | SQLite schema / 列迁移 | 已完成 |
-| `internal/auth` + `/api/auth/*` | JWT / ticket / 管理员引导 | 已完成 |
-| `internal/api` | REST 路由 | 已完成 |
-| `internal/static` | SPA 静态托管 | 已完成 |
-| `internal/tg` | 登录、同步、下载、自定义频道快照 | 已完成 |
-| `internal/worker` + `progress` | 下载与 SSE | 已完成 |
-| `internal/watcher` | 监听增量入队 + 内容类型 | 已完成 |
-| `web` 壳 | 深色 + 粉色高亮、宽窄屏布局、@vicons/ionicons5 | 已完成壳 |
-| Docker | 多架构镜像 | **已完成**（`wannayoung/tdload`，BIND `3080`） |
-
-**前端导航：** 仪表盘 · Telegram · 收藏 · 频道 · 任务 · 监听 · 资源库 · 设置
-
-**当前侧栏：** 同上（收藏 / 频道 / 任务按 kind 显示活跃数徽标）
-
-### M0 — 仓库骨架
-
-- [x] `go mod` 初始化、`cmd/tdload`、健康检查、配置加载
-- [x] SQLite 迁移、`users` 与 `ADMIN_*` 引导
-- [x] JWT 登录、静态资源托管
-- [x] `LICENSE` / `NOTICE` / 根 README
-- [x] 表结构预建：`tg_accounts` / `tasks` / `task_items` / `media_index` / `task_logs` / `watched_chats`
-- [x] `/api/dashboard`、`/api/settings`、`/api/tg/status`（占位）
-
-### M1 — Telegram 会话
-
-- [x] app_id/hash 配置（环境变量 + 设置页 / Telegram 页可写）
-- [x] 验证码登录 + session 持久化（`config/session/account_1.json`）
-- [ ]（可选）二维码登录
-- [x] `/api/tg/status` 真实探活、logout
-- [x] 前端 Telegram 页：凭证、发码、验证码/2FA、退出
-
-### M2 — 下载闭环
-
-- [x] URL 入队 API（`POST /api/tasks`）
-- [x] Worker + gotd/tdl 解析链接下载 + Progress → SSE
-- [x] 暂停 / 重试 / 失败原因
-- [x] 设置页读写 YAML（下载参数已接到 Worker）
-- [ ] JSON 导出入队（后续）
-
-### M3 — 前端壳（已完成）
-
-- [x] Vue 脚手架（Vue3 + Vite + Naive UI + Pinia + @vicons/ionicons5）
-- [x] 深色模式 + 粉色主色（`#f472b6`）；宽屏侧栏 / 窄屏顶栏下拉（≤1000px）
-- [x] 登录、仪表盘、TG、任务（链接入队）、设置页
-- [x] 任务真实列表 + SSE 进度 + 轮询兜底
-
-### M3.5 — 产品对齐（频道 · 任务 · 同步）（已完成）
-
-依赖 M1 + M2 Worker；按 §7.2 验收。
-
-**后端**
-
-- [x] 迁移：`tg_dialogs`、`saved_messages_cache`、`chat_download_state`（§6.8–6.10）
-- [x] `POST /api/tg/sync`、`GET /api/tg/summary`
-- [x] `GET /api/channels`（含已下载数、扫描水位）
-- [x] `POST /api/channels/{chatId}/scan-cursor`（set / align）
-- [x] Worker：`source=saved_all`（输出 `我的收藏/`；无水位，只补缺失）
-- [x] Worker：`chat_batch` / `chat_continue` / `ids`（频道历史扫描 + 失败重试不抬水位）
-- [x] 收藏 `media_index` 使用 **self user id** 作为 `chat_id`（`tg.FavoritesChatID`）
-- [x] 任务 API：`kind` 分页、`itemCounts`、`/resume` `/cancel` `/retry-failed`、`/tasks/items`
-- [x] 资源库 API：`/library/filters`、chat / mediaType、文件流预览；扫盘不改水位
-
-**前端**
-
-- [x] 侧栏：收藏 · 频道 · 任务 · 监听 · 资源库（活跃徽标按 kind）
-- [x] Telegram 页：同步 + 计数
-- [x] `ChannelsView.vue` + `ChannelDetailView.vue`（继续下载 + 水位对话框）
-- [x] `TasksView.vue`：仅消息下载；`SavedView.vue`：独立收藏同步
-- [x] `LibraryView.vue`：筛选 + 图/视频预览
-- [x] `useAppEvents`：共享单路 SSE（避免浏览器连接数耗尽）
-
-### M3.6 — 频道批量 Worker（已完成）
-
-- [x] `internal/tg`：按 `chat_id` 拉历史、按范围/续下/ids 生成 jobs
-- [x] Worker 更新 `task_items` 并仅推送 **task_progress + itemCounts**
-- [x] 频道工作台：覆盖进度 +「继续下载」；batch_size 持久化；监听不抬高频道扫描水位
-
-### M4 — Docker（已完成）
-
-- [x] 多阶段 Dockerfile（`CGO_ENABLED=0`）
-- [x] compose（`.env.example` + `3080`）
-- [x] buildx amd64/arm64 发布（`wannayoung/tdload`）
-- [x] 卷权限与 session 持久化（`/tdload/config`、`/tdload/downloads`）
-
-### M5 — 监听
-
-- [x] `watched_chats` API（列表 / 候选 / 添加 / 删除）
-- [x] Watcher 定时扫描 + 水位（含端点区间）+ 入队 `watch` / `watch_saved`
-- [x] 设置页监听间隔；监听页（收藏置顶；类型标签；内容类型）
-- [x] SSE `watch_hit`；`filter_json.contentType`：全部 / 媒体 / 图片 / 视频
-- [x] 候选含自定义频道；添加前同步最新消息 ID
-
-### M6 — 硬化
-
-- [x] takeout、rewrite_ext 接入下载路径；资源库扫盘补索引 / 删索引（不改水位）
-- [x] 任务 pause-all / start-all（**仅 API**；任务页已去掉入口）
-- [x] 自定义频道：新增 / 去重 / 权限报错 / 同步最新 / 删除；对话同步保留 `is_custom`
-- [ ] 结构化日志、基础 metrics（可选）
-- [x] 关于信息：设置页版本号 + 源码链接（AGPL，`GET /api/about`）
+前端导航：仪表盘 · Telegram · 收藏 · 频道 · 任务 · 监听 · 资源库 · 设置（收藏 / 频道 / 任务按 kind 显示活跃徽标）。
 
 ---
 
@@ -1063,39 +958,10 @@ services:
 
 ---
 
-## 17. 与 xtools 的对照（方便抄作业）
+## 17. 可选后续
 
-| 能力 | xtools | tdload |
-|------|--------|--------|
-| 语言 | Rust + Axum | Go |
-| 下载引擎 | xchina-core | tdl/core + gotd |
-| DB | MySQL 外置 | SQLite 内置文件 |
-| 前端 | Vue3 + Naive UI | 同左 |
-| 进度 | SSE | 同左 |
-| 配置 | YAML + MYSQL_/ADMIN_ | YAML + ADMIN_/TG_ |
-| 镜像 | 多阶段 amd64/arm64 | 同左；运行镜像含 ffmpeg（资源库视频封面） |
-| 参考路径 | 整个 `xtools/` | 只读，不 import |
-
-可重点参考的 xtools 文件：
-
-- 部署与环境：[xtools/README.md](../xtools/README.md)、[xtools/Dockerfile](../xtools/Dockerfile)、[xtools/docker-compose.yml](../xtools/docker-compose.yml)
-- API 路由形状：[xtools/crates/xtools/src/api/mod.rs](../xtools/crates/xtools/src/api/mod.rs)
-- Worker 槽位与 drain：[xtools/crates/xtools/src/worker.rs](../xtools/crates/xtools/src/worker.rs)
-- 前端栈：[xtools/web/package.json](../xtools/web/package.json)
-
----
-
-## 18. 下一步
-
-**当前：** 一期 + 监听 + 自定义频道均已落地。主线可视为完成。
-
-建议顺序：
-
-1. ~~M1 Telegram 登录~~ ✅（QR 未做）
-2. ~~M2 链接下载闭环~~ ✅
-3. ~~**M3.5 / M3.6** 频道工作台 + 收藏独立页 + 消息任务~~ ✅
-4. ~~**M4** Docker 多架构~~ ✅（`wannayoung/tdload`）
-5. ~~**M5** 监听自动入队 + 内容类型~~ ✅
-6. ~~**M6** 扫盘 / takeout / 自定义频道 / 关于页~~ ✅（结构化日志/metrics 可选）
-
-可选后续：二维码登录、JSON 导出入队、资源库缩略图 / 关键词搜索 UI、任务日志 API。
+- 二维码登录
+- JSON 导出入队
+- 任务日志 API（`/api/tasks/{id}/logs`）
+- 资源库关键词搜索 UI
+- 结构化日志 / 基础 metrics

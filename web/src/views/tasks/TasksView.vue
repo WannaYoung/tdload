@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref } from "vue";
-import { NButton } from "naive-ui";
+import { NButton, NIcon } from "naive-ui";
+import { RefreshOutline } from "@vicons/ionicons5";
 import { useMobile } from "../../composables/useMobile";
 import { useAppEvents } from "../../composables/useAppEvents";
 import type { ItemCounts } from "../../api/types";
@@ -85,11 +86,14 @@ onUnmounted(() => {
 <template>
   <div class="page list-page" :class="{ pinned: !isMobile }">
     <div class="toolbar">
-      <div class="toolbar-left">
-        <h2>任务</h2>
-      </div>
+      <h2>任务</h2>
       <div class="toolbar-actions">
-        <n-button quaternary @click="reload(false)">刷新</n-button>
+        <n-button @click="reload(false)">
+          <template #icon>
+            <n-icon :component="RefreshOutline" />
+          </template>
+          刷新
+        </n-button>
       </div>
     </div>
     <MessageDownloadPanel ref="messagePanel" :active="true" />
@@ -108,12 +112,6 @@ h2 {
   justify-content: space-between;
   gap: 16px;
 }
-.toolbar-left {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  min-width: 0;
-}
 .toolbar-actions {
   display: flex;
   flex-wrap: nowrap;
@@ -121,16 +119,6 @@ h2 {
   gap: 8px;
   margin-left: auto;
   flex-shrink: 0;
-}
-@media (max-width: 640px) {
-  .toolbar {
-    flex-wrap: wrap;
-  }
-  .toolbar-left {
-    width: 100%;
-  }
-  .toolbar-actions {
-    margin-left: 0;
-  }
+  width: auto;
 }
 </style>

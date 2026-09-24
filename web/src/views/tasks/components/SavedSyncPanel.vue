@@ -229,7 +229,7 @@ const columns = computed<DataTableColumns<SavedTask>>(() => [
         NButton,
         {
           size: "tiny",
-          quaternary: true,
+          secondary: true,
           type: "error",
           title: "停止并删除",
           onClick: () => void deleteTask(r.id),

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from "vue";
 import { NButton, NEmpty, NIcon, NSelect, NSpin, useMessage } from "naive-ui";
-import { PlayOutline } from "@vicons/ionicons5";
+import { PlayOutline, RefreshOutline, SyncOutline } from "@vicons/ionicons5";
 import { api, ensureTicket, getToken } from "../../api/http";
 import type { LibraryItem } from "../../api/types";
 import { useNoImage, withImagePlaceholder } from "../../composables/useNoImage";
@@ -269,8 +269,18 @@ onUnmounted(() => {
     <div class="toolbar">
       <h2>资源库</h2>
       <div class="toolbar-actions">
-        <n-button quaternary :loading="syncing" @click="syncDisk">扫盘同步</n-button>
-        <n-button quaternary :loading="loading" @click="load">刷新</n-button>
+        <n-button :loading="loading" @click="load">
+          <template #icon>
+            <n-icon :component="RefreshOutline" />
+          </template>
+          刷新
+        </n-button>
+        <n-button type="primary" :loading="syncing" @click="syncDisk">
+          <template #icon>
+            <n-icon :component="SyncOutline" />
+          </template>
+          同步
+        </n-button>
       </div>
     </div>
 
@@ -383,8 +393,9 @@ h2 {
 }
 .toolbar-actions {
   display: flex;
+  flex-wrap: nowrap;
   align-items: center;
-  gap: 4px;
+  gap: 8px;
   flex-shrink: 0;
   /* 覆盖全局窄屏 width:100%，避免标题被挤成竖排 */
   width: auto;

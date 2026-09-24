@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref } from "vue";
-import { NButton } from "naive-ui";
+import { NButton, NIcon } from "naive-ui";
+import { RefreshOutline, SyncOutline, TrashOutline } from "@vicons/ionicons5";
 import { useMobile } from "../../composables/useMobile";
 import { useAppEvents } from "../../composables/useAppEvents";
 import type { ItemCounts } from "../../api/types";
@@ -71,24 +72,35 @@ onUnmounted(() => {
     <div class="toolbar">
       <h2>收藏同步</h2>
       <div class="toolbar-actions">
-        <n-button quaternary @click="reload(false)">刷新</n-button>
+        <n-button @click="reload(false)">
+          <template #icon>
+            <n-icon :component="RefreshOutline" />
+          </template>
+          刷新
+        </n-button>
         <n-button
-          quaternary
+          type="error"
+          ghost
           :loading="!!savedPanel?.clearing"
           :disabled="(savedPanel?.completedCount ?? 0) <= 0"
           @click="savedPanel?.clearCompleted()"
         >
-          清除完成
+          <template #icon>
+            <n-icon :component="TrashOutline" />
+          </template>
+          清除
         </n-button>
         <n-button
           type="primary"
-          secondary
           :loading="!!savedPanel?.submitting"
           :disabled="!!savedPanel?.hasActiveSync"
           :title="savedPanel?.hasActiveSync ? '已有进行中的同步' : undefined"
           @click="savedPanel?.createTask()"
         >
-          {{ savedPanel?.hasActiveSync ? "同步中" : "开始同步" }}
+          <template #icon>
+            <n-icon :component="SyncOutline" />
+          </template>
+          {{ savedPanel?.hasActiveSync ? "同步中" : "同步" }}
         </n-button>
       </div>
     </div>

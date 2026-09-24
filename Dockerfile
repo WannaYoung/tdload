@@ -12,10 +12,11 @@ RUN pnpm build
 FROM golang:1.26-bookworm AS builder
 WORKDIR /src
 ENV CGO_ENABLED=0
+ARG VERSION=0.1.5
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN go build -trimpath -ldflags="-s -w" -o /out/tdload ./cmd/tdload
+RUN go build -trimpath -ldflags="-s -w -X tdload/internal/version.Version=${VERSION}" -o /out/tdload ./cmd/tdload
 
 FROM debian:bookworm-slim
 RUN apt-get update \

@@ -232,13 +232,13 @@ onUnmounted(() => {
         <p class="sub">{{ greeting }}，{{ displayName }} · {{ subtitle }}</p>
       </div>
       <div class="page-head-actions">
-        <n-button quaternary @click="refresh(false)">
+        <n-button @click="refresh(false)">
           <template #icon>
             <n-icon :component="RefreshOutline" />
           </template>
           刷新
         </n-button>
-        <n-button @click="go('telegram')">
+        <n-button type="primary" ghost @click="go('telegram')">
           <template #icon>
             <n-icon :component="PaperPlaneOutline" />
           </template>

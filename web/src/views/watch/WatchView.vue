@@ -4,12 +4,14 @@ import {
   NButton,
   NDataTable,
   NEmpty,
+  NIcon,
   NSelect,
   NTag,
   useMessage,
   type DataTableColumns,
   type SelectOption,
 } from "naive-ui";
+import { AddOutline, RefreshOutline, TrashOutline } from "@vicons/ionicons5";
 import { api } from "../../api/http";
 import { useMobile } from "../../composables/useMobile";
 import type { WatchCandidate, WatchRow } from "../../api/types";
@@ -192,18 +194,19 @@ const columns: DataTableColumns<WatchRow> = [
   {
     title: "操作",
     key: "actions",
-    width: 90,
+    width: 72,
     align: "right",
     render: (r) =>
       h(
         NButton,
         {
-          size: "small",
-          type: "error",
+          size: "tiny",
           secondary: true,
+          type: "error",
+          title: "删除",
           onClick: () => void remove(r),
         },
-        { default: () => "删除" },
+        { icon: () => h(NIcon, { component: TrashOutline }) },
       ),
   },
 ];
@@ -290,7 +293,12 @@ onUnmounted(() => {
         <span class="interval">间隔 {{ intervalMinutes }} 分钟</span>
       </div>
       <div class="toolbar-actions">
-        <n-button quaternary :loading="loading" @click="load(false)">刷新</n-button>
+        <n-button :loading="loading" @click="load(false)">
+          <template #icon>
+            <n-icon :component="RefreshOutline" />
+          </template>
+          刷新
+        </n-button>
       </div>
     </div>
 
@@ -313,7 +321,10 @@ onUnmounted(() => {
           :disabled="loading"
         />
         <n-button type="primary" :loading="adding" :disabled="selectedChatId == null" @click="addWatch">
-          添加监听
+          <template #icon>
+            <n-icon :component="AddOutline" />
+          </template>
+          添加
         </n-button>
       </div>
 
@@ -360,9 +371,12 @@ h2 {
 }
 .toolbar-actions {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
+  align-items: center;
   gap: 8px;
   margin-left: auto;
+  flex-shrink: 0;
+  width: auto;
 }
 .panel {
   display: flex;
@@ -380,6 +394,7 @@ h2 {
 }
 .composer.row {
   flex-direction: row;
+  flex-wrap: nowrap;
   align-items: flex-start;
 }
 .composer-input {
@@ -389,6 +404,10 @@ h2 {
 .composer-type {
   flex: 0 0 110px;
   width: 110px;
+}
+.composer.row > .n-button {
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 .message-table {
   flex: 1 1 auto;
@@ -412,17 +431,5 @@ h2 {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-@media (max-width: 1000px) {
-  .composer.row {
-    flex-direction: column;
-  }
-  .composer-type {
-    flex: 1 1 auto;
-    width: 100%;
-  }
-  .composer.row > .n-button {
-    align-self: flex-end;
-  }
 }
 </style>

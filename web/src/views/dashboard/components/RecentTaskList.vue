@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { NButton, NIcon, NProgress, NTag } from "naive-ui";
-import { CloudDownloadOutline, EllipsisHorizontalOutline } from "@vicons/ionicons5";
+import { DownloadOutline, EllipsisHorizontalOutline } from "@vicons/ionicons5";
 
 export type RecentTask = {
   id: number;
@@ -126,7 +126,7 @@ function taskPct(t: RecentTask) {
       </li>
     </ul>
     <div v-else class="empty">
-      <n-icon :component="CloudDownloadOutline" :size="28" />
+      <n-icon :component="DownloadOutline" :size="28" />
       <p>还没有下载任务</p>
       <n-button size="small" type="primary" @click="emit('navigate', 'tasks')">创建第一个任务</n-button>
     </div>
