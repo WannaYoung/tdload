@@ -19,7 +19,7 @@ RUN go build -trimpath -ldflags="-s -w" -o /out/tdload ./cmd/tdload
 
 FROM debian:bookworm-slim
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates \
+    && apt-get install -y --no-install-recommends ca-certificates ffmpeg \
     && rm -rf /var/lib/apt/lists/* \
     && mkdir -p /tdload/config/session /tdload/downloads /app/web
 WORKDIR /app

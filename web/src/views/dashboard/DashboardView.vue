@@ -44,8 +44,46 @@ const subtitle = computed(() => {
   if (!s.tgActive) return "尚未登录 Telegram，登录后可同步频道与下载";
   if (s.tasksRunning > 0) return `当前有 ${s.tasksRunning} 个任务正在下载`;
   if (s.tasksQueued > 0) return `队列中还有 ${s.tasksQueued} 个任务等待处理`;
-  if (s.tasksFailed > 0) return `${s.tasksFailed} 个任务失败，可在任务页重试`;
+  if (s.tasksFailed > 0) return `${s.tasksFailed} 个任务失败，请到对应页面查看`;
   return "系统运行正常";
+});
+
+const failureLinks = computed(() => {
+  const s = stats.value;
+  if (!s || !s.tasksFailed) return [];
+  const links: { route: string; label: string; count: number }[] = [];
+  if ((s.tasksFailedMessage ?? 0) > 0) {
+    links.push({ route: "tasks", label: `消息 ${s.tasksFailedMessage}`, count: s.tasksFailedMessage! });
+  }
+  if ((s.tasksFailedSaved ?? 0) > 0) {
+    links.push({ route: "saved", label: `收藏 ${s.tasksFailedSaved}`, count: s.tasksFailedSaved! });
+  }
+  if ((s.tasksFailedChannel ?? 0) > 0) {
+    links.push({ route: "channels", label: `频道 ${s.tasksFailedChannel}`, count: s.tasksFailedChannel! });
+  }
+  if ((s.tasksFailedWatch ?? 0) > 0) {
+    links.push({ route: "watch", label: `监听 ${s.tasksFailedWatch}`, count: s.tasksFailedWatch! });
+  }
+  // 兼容旧后端未返回分项时，仍给一个总入口
+  if (!links.length && s.tasksFailed > 0) {
+    links.push({ route: "tasks", label: "查看任务", count: s.tasksFailed });
+  }
+  return links;
+});
+
+const failureHint = computed(() => {
+  const links = failureLinks.value;
+  if (!links.length) return "";
+  if (links.length === 1) {
+    const map: Record<string, string> = {
+      tasks: "可在任务页查看原因并重试。",
+      saved: "可在收藏页查看同步失败记录。",
+      channels: "可在频道页查看下载失败批次。",
+      watch: "可在监听页查看相关任务。",
+    };
+    return map[links[0].route] || "请到对应页面查看。";
+  }
+  return "请到对应页面查看失败原因。";
 });
 
 const kpis = computed(() => {
@@ -238,14 +276,23 @@ onUnmounted(() => {
       </div>
     </n-alert>
     <n-alert
-      v-else-if="stats && stats.tasksFailed > 0"
+      v-else-if="stats && failureLinks.length"
       type="warning"
       :title="`${stats.tasksFailed} 个任务失败`"
       style="margin-bottom: 16px"
     >
       <div class="alert-body">
-        <span>可在任务页查看原因并重试。</span>
-        <n-button size="small" @click="go('tasks')">查看任务</n-button>
+        <span>{{ failureHint }}</span>
+        <div class="alert-actions">
+          <n-button
+            v-for="link in failureLinks"
+            :key="link.route"
+            size="small"
+            @click="go(link.route)"
+          >
+            {{ link.label }}
+          </n-button>
+        </div>
       </div>
     </n-alert>
 
@@ -305,6 +352,11 @@ onUnmounted(() => {
   flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
+  gap: 8px;
+}
+.alert-actions {
+  display: flex;
+  flex-wrap: wrap;
   gap: 8px;
 }
 .page-head-actions {

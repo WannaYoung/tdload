@@ -22,6 +22,10 @@ export type DashboardStats = {
   tasksQueued: number;
   tasksRunning: number;
   tasksFailed: number;
+  tasksFailedMessage?: number;
+  tasksFailedSaved?: number;
+  tasksFailedChannel?: number;
+  tasksFailedWatch?: number;
   tasksPaused: number;
   tasksDone: number;
   tasksMessageActive?: number;
@@ -119,6 +123,7 @@ export type ChannelDownloadTask = {
   title: string;
   status: string;
   source?: string;
+  phase?: string;
   progressDone?: number;
   progressTotal?: number;
   doneFiles?: number;

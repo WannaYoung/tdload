@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/go-faster/errors"
@@ -18,25 +19,30 @@ import (
 	"github.com/gotd/td/telegram/query/messages"
 	"github.com/gotd/td/tg"
 	"github.com/iyear/tdl/core/util/tutil"
+	"golang.org/x/sync/errgroup"
 )
 
 type DownloadProgress func(doneFiles, totalFiles int, fileName string)
 
 type DownloadOptions struct {
-	URLs        []string
-	OutDir      string
-	OutSubdir   string
-	Threads     int
-	Template    string
-	GroupAlbum  bool
-	SkipSame    bool
-	RewriteExt  bool
-	ContentType string // all|media|image|video，空视为 all
-	OnProgress  DownloadProgress
-	Exists      func(chatID int64, messageID int, size int64) (bool, string, error)
-	OnFile      func(chatID int64, messageID int, fileName string, size int64, path, mime string) error
-	OnItem      func(chatID int64, messageID int, status, fileName, localPath, errMsg string)
-	OnResolved  func(info ChatInfo) // 解析到真实频道后回调
+	URLs         []string
+	OutDir       string
+	OutSubdir    string
+	Threads      int
+	Concurrency  int // 同时下载的文件数（对应 tdl -l）
+	Template     string
+	GroupAlbum   bool
+	SkipSame     bool
+	RewriteExt   bool
+	ContentType  string // all|media|image|video，空视为 all
+	OnProgress   DownloadProgress
+	Exists       func(chatID int64, messageID int, size int64) (bool, string, error)
+	OnFile       func(chatID int64, messageID int, fileName string, size int64, path, mime string) error
+	OnItem       func(chatID int64, messageID int, status, fileName, localPath, errMsg string)
+	OnResolved   func(info ChatInfo) // 解析到真实频道后回调
+	// OnScanProgress：扫描待下载媒体时回调（found 递增）；OnReadyToDownload：扫描结束、开始下载前。
+	OnScanProgress    func(found int)
+	OnReadyToDownload func(total int)
 }
 
 // ChatInfo 解析后的频道/群信息。
@@ -96,15 +102,7 @@ func (m *Manager) DownloadURLs(ctx context.Context, opt DownloadOptions) error {
 	if opt.OutDir == "" {
 		opt.OutDir = m.Cfg.DownloadDir
 	}
-	if opt.Threads <= 0 {
-		opt.Threads = m.Cfg.Threads
-		if opt.Threads <= 0 {
-			opt.Threads = 4
-		}
-	}
-	if opt.Threads > 8 {
-		opt.Threads = 8
-	}
+	_, conc := resolveDownloadLimits(&opt, m.Cfg.Threads, m.Cfg.Concurrency)
 	if opt.Template == "" {
 		opt.Template = m.Cfg.Template
 	}
@@ -163,12 +161,25 @@ func (m *Manager) DownloadURLs(ctx context.Context, opt DownloadOptions) error {
 		if total == 0 {
 			return fmt.Errorf("没有可下载的消息")
 		}
-		done := 0
-		saved := 0
-		skipped := 0
+		var done atomic.Int32
+		var saved atomic.Int32
+		var skipped atomic.Int32
+		cb := &cbGuard{opt: &opt}
 		if opt.OnProgress != nil {
-			opt.OnProgress(done, total, "准备下载")
+			opt.OnProgress(0, total, "准备下载")
 		}
+
+		type fileJob struct {
+			chatID   int64
+			chatName string
+			msgID    int
+			name     string
+			path     string
+			size     int64
+			mime     string
+			loc      tg.InputFileLocationClass
+		}
+		var toFetch []fileJob
 
 		for _, j := range jobs {
 			select {
@@ -176,36 +187,21 @@ func (m *Manager) DownloadURLs(ctx context.Context, opt DownloadOptions) error {
 				return ctx.Err()
 			default:
 			}
-			if opt.OnItem != nil {
-				opt.OnItem(j.chatID, j.msgID, "downloading", "", "", "")
-			}
 			file, ok := messages.Elem{Msg: j.msg}.File()
 			if !ok {
-				skipped++
-				done++
-				if opt.OnItem != nil {
-					opt.OnItem(j.chatID, j.msgID, "skipped", "", "", "无媒体")
-				}
-				if opt.OnProgress != nil {
-					opt.OnProgress(done, total, fmt.Sprintf("跳过无媒体 msg=%d", j.msgID))
-				}
+				skipped.Add(1)
+				cb.item(j.chatID, j.msgID, "skipped", "", "", "无媒体")
+				bumpDone(&done, total, fmt.Sprintf("跳过无媒体 msg=%d", j.msgID), cb)
 				continue
 			}
 
 			size := mediaSize(j.msg)
 			if opt.SkipSame && opt.Exists != nil && size > 0 {
 				if exists, path, err := opt.Exists(j.chatID, j.msgID, size); err == nil && exists {
-					if opt.OnItem != nil {
-						opt.OnItem(j.chatID, j.msgID, "skipped", file.Name, path, "")
-					}
-					if opt.OnFile != nil {
-						_ = opt.OnFile(j.chatID, j.msgID, file.Name, size, path, file.MIMEType)
-					}
-					saved++
-					done++
-					if opt.OnProgress != nil {
-						opt.OnProgress(done, total, file.Name+" (已存在)")
-					}
+					cb.item(j.chatID, j.msgID, "skipped", file.Name, path, "")
+					_ = cb.file(j.chatID, j.msgID, file.Name, size, path, file.MIMEType)
+					saved.Add(1)
+					bumpDone(&done, total, file.Name+" (已存在)", cb)
 					continue
 				}
 			}
@@ -222,46 +218,65 @@ func (m *Manager) DownloadURLs(ctx context.Context, opt DownloadOptions) error {
 			if err := os.MkdirAll(chatDir, 0o755); err != nil {
 				return err
 			}
-			path := uniquePath(filepath.Join(chatDir, name))
-			threads := tutil.BestThreads(size, opt.Threads)
-			if threads < 1 {
-				threads = 1
-			}
-
-			slog.Info("downloading", "file", name, "path", path, "size", size, "threads", threads)
-			fileCtx, cancel := context.WithTimeout(ctx, 30*time.Minute)
-			builder := dl.Download(api, file.Location).WithThreads(threads)
-			_, err := builder.ToPath(fileCtx, path)
-			cancel()
+			path, err := allocUniquePath(filepath.Join(chatDir, name))
 			if err != nil {
-				_ = os.Remove(path)
-				if opt.OnItem != nil {
-					opt.OnItem(j.chatID, j.msgID, "failed", name, "", err.Error())
-				}
-				return errors.Wrapf(err, "下载 %s", name)
+				cb.item(j.chatID, j.msgID, "failed", name, "", err.Error())
+				bumpDone(&done, total, name+" 失败", cb)
+				continue
 			}
-			if size == 0 {
-				if st, err := os.Stat(path); err == nil {
-					size = st.Size()
+			toFetch = append(toFetch, fileJob{
+				chatID: j.chatID, chatName: j.chatName, msgID: j.msgID,
+				name: name, path: path, size: size, mime: file.MIMEType, loc: file.Location,
+			})
+		}
+
+		eg, egCtx := errgroup.WithContext(ctx)
+		eg.SetLimit(conc)
+		for _, fj := range toFetch {
+			fj := fj
+			eg.Go(func() error {
+				select {
+				case <-egCtx.Done():
+					_ = os.Remove(fj.path)
+					return egCtx.Err()
+				default:
 				}
-			}
-			if opt.OnFile != nil {
-				if err := opt.OnFile(j.chatID, j.msgID, name, size, path, file.MIMEType); err != nil {
+				cb.item(fj.chatID, fj.msgID, "downloading", fj.name, "", "")
+				threads := tutil.BestThreads(fj.size, opt.Threads)
+				if threads < 1 {
+					threads = 1
+				}
+				slog.Info("downloading", "file", fj.name, "path", fj.path, "size", fj.size, "threads", threads, "concurrency", conc)
+				fileCtx, cancel := context.WithTimeout(egCtx, 30*time.Minute)
+				_, err := dl.Download(api, fj.loc).WithThreads(threads).ToPath(fileCtx, fj.path)
+				cancel()
+				if err != nil {
+					_ = os.Remove(fj.path)
+					cb.item(fj.chatID, fj.msgID, "failed", fj.name, "", err.Error())
+					bumpDone(&done, total, fj.name+" 失败", cb)
+					return errors.Wrapf(err, "下载 %s", fj.name)
+				}
+				size := fj.size
+				if size == 0 {
+					if st, err := os.Stat(fj.path); err == nil {
+						size = st.Size()
+					}
+				}
+				if err := cb.file(fj.chatID, fj.msgID, fj.name, size, fj.path, fj.mime); err != nil {
 					slog.Warn("index media", "err", err)
 				}
-			}
-			if opt.OnItem != nil {
-				opt.OnItem(j.chatID, j.msgID, "done", name, path, "")
-			}
-			saved++
-			done++
-			if opt.OnProgress != nil {
-				opt.OnProgress(done, total, name)
-			}
-			slog.Info("downloaded", "file", name, "path", path)
+				cb.item(fj.chatID, fj.msgID, "done", fj.name, fj.path, "")
+				saved.Add(1)
+				bumpDone(&done, total, fj.name, cb)
+				slog.Info("downloaded", "file", fj.name, "path", fj.path)
+				return nil
+			})
 		}
-		if saved == 0 {
-			return fmt.Errorf("未下载到任何文件（共 %d 条消息，跳过 %d）", total, skipped)
+		if err := eg.Wait(); err != nil {
+			return err
+		}
+		if saved.Load() == 0 {
+			return fmt.Errorf("未下载到任何文件（共 %d 条消息，跳过 %d）", total, skipped.Load())
 		}
 		return nil
 		})

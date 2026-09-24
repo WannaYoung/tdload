@@ -466,6 +466,15 @@ func (d *DB) MaxTaskItemMessageID(ctx context.Context, taskID int64) (int, error
 	return int(n.Int64), nil
 }
 
+func (d *DB) MinTaskItemMessageID(ctx context.Context, taskID int64) (int, error) {
+	var n sql.NullInt64
+	err := d.SQL.QueryRowContext(ctx, `SELECT MIN(message_id) FROM task_items WHERE task_id=?`, taskID).Scan(&n)
+	if err != nil || !n.Valid {
+		return 0, err
+	}
+	return int(n.Int64), nil
+}
+
 func (d *DB) UpsertChatDownloadState(ctx context.Context, accountID, chatID int64, lastMessageID int) error {
 	now := time.Now().UTC().Format(time.RFC3339)
 	_, err := d.SQL.ExecContext(ctx, `

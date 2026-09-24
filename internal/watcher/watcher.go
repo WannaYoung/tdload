@@ -78,7 +78,7 @@ func (w *Watcher) tick(ctx context.Context) {
 			}
 		}
 		if selfID > 0 {
-			if _, err := w.TG.SyncSaved(ctx, selfID); err != nil {
+			if _, err := w.TG.SyncSaved(ctx, selfID, nil); err != nil {
 				slog.Warn("watch sync saved", "err", err)
 			}
 			favID = tg.FavoritesChatID(selfID)

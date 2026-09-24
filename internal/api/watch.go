@@ -154,7 +154,7 @@ func (s *Server) handleCreateWatch(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 			if selfID > 0 {
-				_, _ = s.TG.SyncSaved(r.Context(), selfID)
+				_, _ = s.TG.SyncSaved(r.Context(), selfID, nil)
 				latest, _ = s.DB.MaxSavedMessageID(r.Context(), db.DefaultTGAccountID)
 			}
 		}

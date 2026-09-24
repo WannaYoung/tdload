@@ -269,7 +269,7 @@ func (s *Server) handleTGSync(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		n, err := s.TG.SyncSaved(r.Context(), selfID)
+		n, err := s.TG.SyncSaved(r.Context(), selfID, nil)
 		if err != nil {
 			writeErr(w, http.StatusBadRequest, err.Error())
 			return

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"tdload/internal/db"
 )
@@ -123,9 +124,16 @@ func (s *Server) handleChannelContinue(w http.ResponseWriter, r *http.Request) {
 	}
 
 	opt, _ := json.Marshal(map[string]any{
-		"chatId": chatID, "count": body.Count,
+		"chatId": chatID, "count": body.Count, "phase": "listing", "chatTitle": d.Title,
+		"fromMessageId": cursor, // 点击继续时的当前水位
 	})
 	title := d.Title
+	if title == "" || strings.HasPrefix(strings.TrimSpace(title), "@") {
+		if d.Username != "" && (title == "" || strings.EqualFold(strings.TrimPrefix(title, "@"), d.Username)) {
+			// 仍无更好标题时先用不带 @ 的用户名；展示层会再解析
+			title = d.Username
+		}
+	}
 	if title == "" {
 		title = fmt.Sprintf("%d", chatID)
 	}
@@ -180,8 +188,8 @@ func (s *Server) handleChannelScanCursor(w http.ResponseWriter, r *http.Request)
 			return
 		}
 	case "set":
-		if body.MessageID < 0 {
-			writeErr(w, http.StatusBadRequest, "messageId 不能为负数")
+		if body.MessageID < 1 {
+			writeErr(w, http.StatusBadRequest, "messageId 最小为 1")
 			return
 		}
 		if err := s.DB.SetScanCursor(r.Context(), db.DefaultTGAccountID, chatID, body.MessageID); err != nil {

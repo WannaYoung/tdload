@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/go-faster/errors"
@@ -20,6 +21,7 @@ import (
 	"github.com/gotd/td/tg"
 	"github.com/gotd/td/tgerr"
 	"github.com/iyear/tdl/core/util/tutil"
+	"golang.org/x/sync/errgroup"
 )
 
 // ChatDownloadParams 频道历史下载参数。
@@ -46,15 +48,7 @@ func (m *Manager) DownloadChat(ctx context.Context, opt DownloadOptions, p ChatD
 	if opt.OutDir == "" {
 		opt.OutDir = m.Cfg.DownloadDir
 	}
-	if opt.Threads <= 0 {
-		opt.Threads = m.Cfg.Threads
-		if opt.Threads <= 0 {
-			opt.Threads = 4
-		}
-	}
-	if opt.Threads > 8 {
-		opt.Threads = 8
-	}
+	_, conc := resolveDownloadLimits(&opt, m.Cfg.Threads, m.Cfg.Concurrency)
 	if opt.Template == "" {
 		opt.Template = m.Cfg.Template
 	}
@@ -93,12 +87,18 @@ func (m *Manager) DownloadChat(ctx context.Context, opt DownloadOptions, p ChatD
 			opt.OnResolved(info)
 		}
 
-		jobs, end, err := collectChatMedia(ctx, api, peer, p)
+		jobs, end, err := collectChatMedia(ctx, api, peer, p, opt.OnScanProgress)
 		if err != nil {
 			return friendlyChatAccessErr(err)
 		}
 		scanEnd = end
 		slog.Info("chat download jobs", "chat", chatID, "mode", p.Mode, "jobs", len(jobs), "scanEnd", end)
+
+		if opt.OnReadyToDownload != nil {
+			opt.OnReadyToDownload(len(jobs))
+		} else if opt.OnScanProgress != nil {
+			opt.OnScanProgress(len(jobs))
+		}
 
 		if len(jobs) == 0 {
 			if opt.OnProgress != nil {
@@ -113,10 +113,21 @@ func (m *Manager) DownloadChat(ctx context.Context, opt DownloadOptions, p ChatD
 		}
 
 		total := len(jobs)
-		done := 0
+		var done atomic.Int32
+		cb := &cbGuard{opt: &opt}
 		if opt.OnProgress != nil {
-			opt.OnProgress(done, total, "准备下载")
+			opt.OnProgress(0, total, "准备下载")
 		}
+
+		type fileJob struct {
+			msgID int
+			name  string
+			path  string
+			size  int64
+			mime  string
+			loc   tg.InputFileLocationClass
+		}
+		var toFetch []fileJob
 
 		for _, msg := range jobs {
 			select {
@@ -124,44 +135,24 @@ func (m *Manager) DownloadChat(ctx context.Context, opt DownloadOptions, p ChatD
 				return ctx.Err()
 			default:
 			}
-			if opt.OnItem != nil {
-				opt.OnItem(chatID, msg.ID, "downloading", "", "", "")
-			}
 			file, ok := messages.Elem{Msg: msg}.File()
 			if !ok {
-				done++
-				if opt.OnItem != nil {
-					opt.OnItem(chatID, msg.ID, "skipped", "", "", "无媒体")
-				}
-				if opt.OnProgress != nil {
-					opt.OnProgress(done, total, fmt.Sprintf("跳过无媒体 msg=%d", msg.ID))
-				}
+				cb.item(chatID, msg.ID, "skipped", "", "", "无媒体")
+				bumpDone(&done, total, fmt.Sprintf("跳过无媒体 msg=%d", msg.ID), cb)
 				continue
 			}
 			if !MatchContentType(opt.ContentType, file.MIMEType, file.Name) {
-				done++
-				if opt.OnItem != nil {
-					opt.OnItem(chatID, msg.ID, "skipped", file.Name, "", "类型不符")
-				}
-				if opt.OnProgress != nil {
-					opt.OnProgress(done, total, file.Name+" (类型不符)")
-				}
+				cb.item(chatID, msg.ID, "skipped", file.Name, "", "类型不符")
+				bumpDone(&done, total, file.Name+" (类型不符)", cb)
 				continue
 			}
 
 			size := mediaSize(msg)
 			if opt.SkipSame && opt.Exists != nil && size > 0 {
 				if exists, path, err := opt.Exists(chatID, msg.ID, size); err == nil && exists {
-					if opt.OnItem != nil {
-						opt.OnItem(chatID, msg.ID, "skipped", file.Name, path, "")
-					}
-					if opt.OnFile != nil {
-						_ = opt.OnFile(chatID, msg.ID, file.Name, size, path, file.MIMEType)
-					}
-					done++
-					if opt.OnProgress != nil {
-						opt.OnProgress(done, total, file.Name+" (已存在)")
-					}
+					cb.item(chatID, msg.ID, "skipped", file.Name, path, "")
+					_ = cb.file(chatID, msg.ID, file.Name, size, path, file.MIMEType)
+					bumpDone(&done, total, file.Name+" (已存在)", cb)
 					continue
 				}
 			}
@@ -175,57 +166,74 @@ func (m *Manager) DownloadChat(ctx context.Context, opt DownloadOptions, p ChatD
 			if err := os.MkdirAll(chatDir, 0o755); err != nil {
 				return err
 			}
-			path := uniquePath(filepath.Join(chatDir, name))
-			threads := tutil.BestThreads(size, opt.Threads)
-			if threads < 1 {
-				threads = 1
-			}
-
-			slog.Info("downloading", "file", name, "path", path, "size", size, "threads", threads)
-			fileCtx, cancel := context.WithTimeout(ctx, 30*time.Minute)
-			_, err := dl.Download(api, file.Location).WithThreads(threads).ToPath(fileCtx, path)
-			cancel()
+			path, err := allocUniquePath(filepath.Join(chatDir, name))
 			if err != nil {
-				_ = os.Remove(path)
-				if opt.OnItem != nil {
-					opt.OnItem(chatID, msg.ID, "failed", name, "", err.Error())
-				}
-				done++
-				if opt.OnProgress != nil {
-					opt.OnProgress(done, total, name+" 失败")
-				}
+				cb.item(chatID, msg.ID, "failed", name, "", err.Error())
+				bumpDone(&done, total, name+" 失败", cb)
 				continue
 			}
-			if size == 0 {
-				if st, err := os.Stat(path); err == nil {
-					size = st.Size()
+			toFetch = append(toFetch, fileJob{
+				msgID: msg.ID, name: name, path: path, size: size, mime: file.MIMEType, loc: file.Location,
+			})
+		}
+
+		eg, egCtx := errgroup.WithContext(ctx)
+		eg.SetLimit(conc)
+		for _, fj := range toFetch {
+			fj := fj
+			eg.Go(func() error {
+				select {
+				case <-egCtx.Done():
+					_ = os.Remove(fj.path)
+					return egCtx.Err()
+				default:
 				}
-			}
-			if opt.OnFile != nil {
-				if err := opt.OnFile(chatID, msg.ID, name, size, path, file.MIMEType); err != nil {
+				cb.item(chatID, fj.msgID, "downloading", fj.name, "", "")
+				threads := tutil.BestThreads(fj.size, opt.Threads)
+				if threads < 1 {
+					threads = 1
+				}
+				slog.Info("downloading", "file", fj.name, "path", fj.path, "size", fj.size, "threads", threads, "concurrency", conc)
+				fileCtx, cancel := context.WithTimeout(egCtx, 30*time.Minute)
+				_, err := dl.Download(api, fj.loc).WithThreads(threads).ToPath(fileCtx, fj.path)
+				cancel()
+				if err != nil {
+					_ = os.Remove(fj.path)
+					cb.item(chatID, fj.msgID, "failed", fj.name, "", err.Error())
+					bumpDone(&done, total, fj.name+" 失败", cb)
+					return nil
+				}
+				size := fj.size
+				if size == 0 {
+					if st, err := os.Stat(fj.path); err == nil {
+						size = st.Size()
+					}
+				}
+				if err := cb.file(chatID, fj.msgID, fj.name, size, fj.path, fj.mime); err != nil {
 					slog.Warn("index media", "err", err)
 				}
-			}
-			if opt.OnItem != nil {
-				opt.OnItem(chatID, msg.ID, "done", name, path, "")
-			}
-			done++
-			if opt.OnProgress != nil {
-				opt.OnProgress(done, total, name)
-			}
-			slog.Info("downloaded", "file", name, "path", path)
+				cb.item(chatID, fj.msgID, "done", fj.name, fj.path, "")
+				bumpDone(&done, total, fj.name, cb)
+				slog.Info("downloaded", "file", fj.name, "path", fj.path)
+				return nil
+			})
 		}
-		return nil
+		return eg.Wait()
 		})
 	})
 	return scanEnd, err
 }
 
-func collectChatMedia(ctx context.Context, api *tg.Client, peer peers.Peer, p ChatDownloadParams) ([]*tg.Message, int, error) {
+func collectChatMedia(ctx context.Context, api *tg.Client, peer peers.Peer, p ChatDownloadParams, onProgress func(found int)) ([]*tg.Message, int, error) {
 	input := peer.InputPeer()
 	seen := map[int]struct{}{}
 	var out []*tg.Message
 	scanEnd := 0
+	report := func() {
+		if onProgress != nil {
+			onProgress(len(out))
+		}
+	}
 
 	switch p.Mode {
 	case "ids":
@@ -243,6 +251,7 @@ func collectChatMedia(ctx context.Context, api *tg.Client, peer peers.Peer, p Ch
 			}
 			seen[mid] = struct{}{}
 			out = append(out, msg)
+			report()
 			if p.GroupAlbum {
 				gctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 				grouped, gerr := tutil.GetGroupedMessages(gctx, api, input, msg)
@@ -258,6 +267,7 @@ func collectChatMedia(ctx context.Context, api *tg.Client, peer peers.Peer, p Ch
 						seen[gm.ID] = struct{}{}
 						out = append(out, gm)
 					}
+					report()
 				}
 			}
 		}
@@ -265,12 +275,17 @@ func collectChatMedia(ctx context.Context, api *tg.Client, peer peers.Peer, p Ch
 	case "batch":
 		from := p.FromMessageID
 		to := from + p.Count - 1
-		chunk, err := fetchMediaInRange(ctx, api, input, from, to, seen)
+		chunk, err := fetchMediaInRange(ctx, api, input, from, to, seen, 0, func(n int) {
+			if onProgress != nil {
+				onProgress(len(out) + n)
+			}
+		})
 		if err != nil {
 			return nil, 0, err
 		}
 		out = chunk
 		scanEnd = to
+		report()
 	default: // continue：从水位之后向前填充，避免只抓「最新 N 条」漏掉中间历史
 		after := p.AfterMessageID
 		maxMedia := p.MaxMedia
@@ -290,6 +305,15 @@ func collectChatMedia(ctx context.Context, api *tg.Client, peer peers.Peer, p Ch
 			window = 3000
 		}
 		scanEnd = after
+		capReport := func(n int) {
+			if onProgress == nil {
+				return
+			}
+			if n > maxMedia {
+				n = maxMedia
+			}
+			onProgress(n)
+		}
 		for len(out) < maxMedia {
 			if latest > 0 && from > latest {
 				scanEnd = latest
@@ -299,15 +323,21 @@ func collectChatMedia(ctx context.Context, api *tg.Client, peer peers.Peer, p Ch
 			if latest > 0 && to > latest {
 				to = latest
 			}
-			chunk, err := fetchMediaInRange(ctx, api, input, from, to, seen)
+			base := len(out)
+			remain := maxMedia - base
+			chunk, err := fetchMediaInRange(ctx, api, input, from, to, seen, remain, func(n int) {
+				capReport(base + n)
+			})
 			if err != nil {
 				return nil, scanEnd, err
 			}
 			out = append(out, chunk...)
+			capReport(len(out))
 			if len(out) >= maxMedia {
 				sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 				out = out[:maxMedia]
 				scanEnd = out[len(out)-1].ID
+				capReport(len(out))
 				break
 			}
 			scanEnd = to
@@ -323,13 +353,19 @@ func collectChatMedia(ctx context.Context, api *tg.Client, peer peers.Peer, p Ch
 
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	if !p.GroupAlbum {
+		report()
 		return out, scanEnd, nil
 	}
 	expanded, err := expandAlbums(ctx, api, input, out)
-	return expanded, scanEnd, err
+	if err != nil {
+		return nil, scanEnd, err
+	}
+	out = expanded
+	report()
+	return out, scanEnd, nil
 }
 
-func fetchMediaInRange(ctx context.Context, api *tg.Client, input tg.InputPeerClass, from, to int, seen map[int]struct{}) ([]*tg.Message, error) {
+func fetchMediaInRange(ctx context.Context, api *tg.Client, input tg.InputPeerClass, from, to int, seen map[int]struct{}, limit int, onFound func(n int)) ([]*tg.Message, error) {
 	if from <= 0 || to < from {
 		return nil, nil
 	}
@@ -354,6 +390,12 @@ func fetchMediaInRange(ctx context.Context, api *tg.Client, input tg.InputPeerCl
 		}
 		seen[msg.ID] = struct{}{}
 		out = append(out, msg)
+		if onFound != nil {
+			onFound(len(out))
+		}
+		if limit > 0 && len(out) >= limit {
+			break
+		}
 	}
 	if err := iter.Err(); err != nil {
 		return nil, errors.Wrap(err, "扫描频道历史")

@@ -386,7 +386,8 @@ Telegram 页同步已加入对话后写入；自定义频道单独插入，`is_c
 **收藏**
 
 - 入队：「开始同步」→ `source=saved_all`；落盘 `{download_dir}/我的收藏/`
-- **无扫描水位**：每次取 `saved_messages_cache` 全量 message id，靠 `skip_same` + `media_index` / 磁盘跳过已有
+- **先拉后下**：任务启动后先拉取最新收藏列表（`phase=listing`，刷新「收藏数」，「已同步」为 —），再按缓存全量下载（`phase=downloading`）
+- **无扫描水位**：靠 `skip_same` + `media_index` / 磁盘跳过已有
 - 列表：同步记录（收藏数 / 已同步 / 失败 / 时间）；「清除完成」；单项可停止并删除
 - 工具栏：**刷新 / 清除完成 / 开始同步**（有进行中同步时禁用开始）；**无**全部暂停/开始
 - 分页：`GET /api/tasks?kind=saved`；SSE 经共享 `useAppEvents`
@@ -415,7 +416,7 @@ Telegram 页同步已加入对话后写入；自定义频道单独插入，`is_c
 
 - **频道筛选**：顶栏下拉；选项第一项固定 **「我的收藏」**，其余为频道/群
 - **媒体类型筛选**：全部 / **图片** / **视频**
-- **预览**：图片 lightbox；视频播放（`/api/library/{id}/file`，支持 Range）
+- **预览**：列表缩略图 / 视频封面（`GET /api/library/{id}/thumb`）；点击浏览页加载原文件（`/file`，视频 Range）
 - 分页、本地路径、删索引（可选删文件）
 - **扫盘补索引**：只维护 `media_index`（增删失效项）；API 返回 `cursorsUpdated` **恒为 0**，**不改** `chat_download_state` / 收藏水位
 
@@ -622,7 +623,8 @@ message/saved 列表项可带 `itemsPreview`（当前页关联 items）或前端
 | GET | `/api/library` | 列表；见下方 query | 已实现 |
 | POST | `/api/library/sync` | 扫盘补索引；只维护 `media_index`，`cursorsUpdated` 恒为 0 | 已实现 |
 | DELETE | `/api/library/{id}` | 删索引（query: `delete_file=1`） | 已实现 |
-| GET | `/api/library/{id}/file` | 原文件流；图片直接展示、视频 **Range** 播放 | 已实现 |
+| GET | `/api/library/{id}/file` | 原文件流；浏览页原图 / 视频 Range 播放 | 已实现 |
+| GET | `/api/library/{id}/thumb` | 列表缩略图（图片缩放；视频 ffmpeg 封面，可缓存） | 已实现 |
 | GET | `/api/library/{id}/thumb` | 可选：视频首帧 / 大图缩略（无则 404，前端用 mime 图标兜底） | 待定 |
 | GET | `/api/about` | 版本号、许可证、源码链接（AGPL） | 已实现 |
 
@@ -1071,7 +1073,7 @@ services:
 | 前端 | Vue3 + Naive UI | 同左 |
 | 进度 | SSE | 同左 |
 | 配置 | YAML + MYSQL_/ADMIN_ | YAML + ADMIN_/TG_ |
-| 镜像 | 多阶段 amd64/arm64 | 同左，无 ffmpeg/mihomo（一期不需要） |
+| 镜像 | 多阶段 amd64/arm64 | 同左；运行镜像含 ffmpeg（资源库视频封面） |
 | 参考路径 | 整个 `xtools/` | 只读，不 import |
 
 可重点参考的 xtools 文件：

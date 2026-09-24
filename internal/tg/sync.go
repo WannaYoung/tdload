@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"time"
 
 	"github.com/gotd/td/telegram"
@@ -15,6 +16,7 @@ import (
 	"github.com/gotd/td/telegram/query/messages"
 	"github.com/gotd/td/tg"
 	"github.com/iyear/tdl/core/util/tutil"
+	"golang.org/x/sync/errgroup"
 
 	"tdload/internal/db"
 )
@@ -156,7 +158,9 @@ func peerKind(p peers.Peer) (kind string, include bool) {
 	}
 }
 
-func (m *Manager) SyncSaved(ctx context.Context, selfUserID int64) (int, error) {
+// SyncSaved 拉取 Saved Messages 全量 id 写入缓存。
+// onProgress 可选：每累计若干条回调一次（最后一条总会回调），供收藏同步任务刷新「收藏数」。
+func (m *Manager) SyncSaved(ctx context.Context, selfUserID int64, onProgress func(count int)) (int, error) {
 	var ids []int
 	var srcChat []int64
 	err := m.Run(ctx, func(ctx context.Context, client *telegram.Client) error {
@@ -181,6 +185,9 @@ func (m *Manager) SyncSaved(ctx context.Context, selfUserID int64) (int, error) 
 					}
 				}
 				srcChat = append(srcChat, src)
+				if onProgress != nil && len(ids)%25 == 0 {
+					onProgress(len(ids))
+				}
 				return nil
 			})
 	})
@@ -189,6 +196,9 @@ func (m *Manager) SyncSaved(ctx context.Context, selfUserID int64) (int, error) 
 	}
 	if err := m.DB.ReplaceSavedMessagesCache(ctx, defaultAccountID, ids, srcChat); err != nil {
 		return 0, err
+	}
+	if onProgress != nil {
+		onProgress(len(ids))
 	}
 	_ = selfUserID
 	return len(ids), nil
@@ -229,62 +239,61 @@ func (m *Manager) DownloadSaved(ctx context.Context, opt DownloadOptions, favori
 		return fmt.Errorf("没有收藏消息")
 	}
 	opt.OutSubdir = FavoritesFolderName
+	if opt.OutDir == "" {
+		opt.OutDir = m.Cfg.DownloadDir
+	}
+	_, conc := resolveDownloadLimits(&opt, m.Cfg.Threads, m.Cfg.Concurrency)
 	return m.Run(ctx, func(ctx context.Context, client *telegram.Client) error {
 		return m.withAPI(ctx, client, func(ctx context.Context, api *tg.Client) error {
 			peer := &tg.InputPeerSelf{}
-			done := 0
 			total := len(messageIDs)
+			var done atomic.Int32
 			dl := downloader.NewDownloader()
+			cb := &cbGuard{opt: &opt}
 			outRoot := filepath.Join(opt.OutDir, FavoritesFolderName)
 			if err := os.MkdirAll(outRoot, 0o755); err != nil {
 				return err
 			}
+
+			type fileJob struct {
+				msgID int
+				name  string
+				path  string
+				size  int64
+				mime  string
+				loc   tg.InputFileLocationClass
+			}
+			var toFetch []fileJob
+
 			for _, mid := range messageIDs {
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				default:
+				}
 				msg, err := tutil.GetSingleMessage(ctx, api, peer, mid)
 				if err != nil {
-					if opt.OnItem != nil {
-						opt.OnItem(favoritesChatID, mid, "failed", "", "", err.Error())
-					}
+					cb.item(favoritesChatID, mid, "failed", "", "", err.Error())
 					continue
 				}
 				elem := messages.Elem{Msg: msg}
 				file, ok := elem.File()
 				if !ok {
-					if opt.OnItem != nil {
-						opt.OnItem(favoritesChatID, mid, "skipped", "", "", "无媒体")
-					}
-					done++
-					if opt.OnProgress != nil {
-						opt.OnProgress(done, total, fmt.Sprintf("msg %d 无媒体", mid))
-					}
+					cb.item(favoritesChatID, mid, "skipped", "", "", "无媒体")
+					bumpDone(&done, total, fmt.Sprintf("msg %d 无媒体", mid), cb)
 					continue
 				}
 				if !MatchContentType(opt.ContentType, file.MIMEType, file.Name) {
-					if opt.OnItem != nil {
-						opt.OnItem(favoritesChatID, mid, "skipped", file.Name, "", "类型不符")
-					}
-					done++
-					if opt.OnProgress != nil {
-						opt.OnProgress(done, total, file.Name+" (类型不符)")
-					}
+					cb.item(favoritesChatID, mid, "skipped", file.Name, "", "类型不符")
+					bumpDone(&done, total, file.Name+" (类型不符)", cb)
 					continue
-				}
-				if opt.OnItem != nil {
-					opt.OnItem(favoritesChatID, mid, "downloading", file.Name, "", "")
 				}
 				size := mediaSize(msg)
 				if opt.SkipSame && opt.Exists != nil && size > 0 {
 					if exists, path, err := opt.Exists(favoritesChatID, mid, size); err == nil && exists {
-						if opt.OnItem != nil {
-							opt.OnItem(favoritesChatID, mid, "skipped", file.Name, path, "")
-						}
-						if opt.OnFile != nil {
-							_ = opt.OnFile(favoritesChatID, mid, file.Name, size, path, file.MIMEType)
-						}
-						done++
-						if opt.OnProgress != nil {
-							opt.OnProgress(done, total, file.Name+" (已存在)")
-						}
+						cb.item(favoritesChatID, mid, "skipped", file.Name, path, "")
+						_ = cb.file(favoritesChatID, mid, file.Name, size, path, file.MIMEType)
+						bumpDone(&done, total, file.Name+" (已存在)", cb)
 						continue
 					}
 				}
@@ -295,30 +304,56 @@ func (m *Manager) DownloadSaved(ctx context.Context, opt DownloadOptions, favori
 				if name == "" {
 					name = fmt.Sprintf("%d_%d", favoritesChatID, mid)
 				}
-				path := filepath.Join(outRoot, safeFileName(name))
-				_, err = dl.Download(api, file.Location).ToPath(ctx, path)
+				path, err := allocUniquePath(filepath.Join(outRoot, safeFileName(name)))
 				if err != nil {
-					if opt.OnItem != nil {
-						opt.OnItem(favoritesChatID, mid, "failed", name, "", err.Error())
-					}
-					done++
-					if opt.OnProgress != nil {
-						opt.OnProgress(done, total, name+" 失败")
-					}
+					cb.item(favoritesChatID, mid, "failed", name, "", err.Error())
+					bumpDone(&done, total, name+" 失败", cb)
 					continue
 				}
-				if opt.OnFile != nil {
-					_ = opt.OnFile(favoritesChatID, mid, name, size, path, file.MIMEType)
-				}
-				if opt.OnItem != nil {
-					opt.OnItem(favoritesChatID, mid, "done", name, path, "")
-				}
-				done++
-				if opt.OnProgress != nil {
-					opt.OnProgress(done, total, name)
-				}
+				toFetch = append(toFetch, fileJob{
+					msgID: mid, name: name, path: path, size: size, mime: file.MIMEType, loc: file.Location,
+				})
 			}
-			return nil
+
+			eg, egCtx := errgroup.WithContext(ctx)
+			eg.SetLimit(conc)
+			for _, fj := range toFetch {
+				fj := fj
+				eg.Go(func() error {
+					select {
+					case <-egCtx.Done():
+						_ = os.Remove(fj.path)
+						return egCtx.Err()
+					default:
+					}
+					cb.item(favoritesChatID, fj.msgID, "downloading", fj.name, "", "")
+					threads := tutil.BestThreads(fj.size, opt.Threads)
+					if threads < 1 {
+						threads = 1
+					}
+					slog.Info("downloading", "file", fj.name, "path", fj.path, "size", fj.size, "threads", threads, "concurrency", conc)
+					fileCtx, cancel := context.WithTimeout(egCtx, 30*time.Minute)
+					_, err := dl.Download(api, fj.loc).WithThreads(threads).ToPath(fileCtx, fj.path)
+					cancel()
+					if err != nil {
+						_ = os.Remove(fj.path)
+						cb.item(favoritesChatID, fj.msgID, "failed", fj.name, "", err.Error())
+						bumpDone(&done, total, fj.name+" 失败", cb)
+						return nil
+					}
+					size := fj.size
+					if size == 0 {
+						if st, err := os.Stat(fj.path); err == nil {
+							size = st.Size()
+						}
+					}
+					_ = cb.file(favoritesChatID, fj.msgID, fj.name, size, fj.path, fj.mime)
+					cb.item(favoritesChatID, fj.msgID, "done", fj.name, fj.path, "")
+					bumpDone(&done, total, fj.name, cb)
+					return nil
+				})
+			}
+			return eg.Wait()
 		})
 	})
 }
@@ -331,7 +366,7 @@ func (m *Manager) SyncAll(ctx context.Context) (*SyncSummary, error) {
 	if _, err := m.SyncDialogs(ctx); err != nil {
 		return nil, err
 	}
-	if _, err := m.SyncSaved(ctx, selfID); err != nil {
+	if _, err := m.SyncSaved(ctx, selfID, nil); err != nil {
 		return nil, err
 	}
 	return m.TGSummary(ctx)

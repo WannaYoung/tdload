@@ -36,17 +36,13 @@ func (s *Server) handleCreateTasks(w http.ResponseWriter, r *http.Request) {
 	}
 	switch source {
 	case "saved_all":
-		n, _ := s.DB.SavedMessageCount(r.Context(), db.DefaultTGAccountID)
-		if n == 0 {
-			writeErr(w, http.StatusBadRequest, "收藏缓存为空，请先在 Telegram 页同步收藏")
-			return
-		}
 		if ok, id, _ := s.DB.HasActiveSavedSyncTask(r.Context()); ok {
 			writeErr(w, http.StatusConflict, fmt.Sprintf("已有进行中的收藏同步 #%d", id))
 			return
 		}
-		opt, _ := json.Marshal(map[string]any{"outSubdir": "我的收藏"})
-		task, err := s.DB.CreateTask(r.Context(), "saved_all", "收藏同步", string(opt), n)
+		// 先入队；Worker 内再拉取最新收藏列表（phase=listing），再下载。
+		opt, _ := json.Marshal(map[string]any{"outSubdir": "我的收藏", "phase": "listing"})
+		task, err := s.DB.CreateTask(r.Context(), "saved_all", "收藏同步", string(opt), 0)
 		if err != nil {
 			writeErr(w, http.StatusInternalServerError, err.Error())
 			return
@@ -107,7 +103,7 @@ func (s *Server) handleCreateTasks(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		if chatTitle == "" && username != "" {
-			chatTitle = "@" + username
+			chatTitle = username
 		}
 		if chatTitle == "" {
 			chatTitle = fmt.Sprintf("%d", chatID)
@@ -174,20 +170,22 @@ func (s *Server) handleCreateTasks(w http.ResponseWriter, r *http.Request) {
 		if body.Count > 5000 {
 			body.Count = 5000
 		}
-		opt, _ := json.Marshal(map[string]any{
-			"chatId": body.ChatID, "fromMessageId": body.FromMessageID, "count": body.Count,
-		})
 		title := body.Title
 		if title == "" {
 			name := d.Title
-			if name == "" {
+			if name == "" || strings.HasPrefix(strings.TrimSpace(name), "@") {
 				name = d.Username
 			}
 			if name == "" {
 				name = fmt.Sprintf("%d", body.ChatID)
 			}
+			name = strings.TrimPrefix(strings.TrimSpace(name), "@")
 			title = name + " · 续下"
 		}
+		opt, _ := json.Marshal(map[string]any{
+			"chatId": body.ChatID, "fromMessageId": body.FromMessageID, "count": body.Count,
+			"chatTitle": d.Title, "phase": "listing",
+		})
 		task, err := s.DB.CreateTask(r.Context(), "chat_continue", title, string(opt), 0)
 		if err != nil {
 			writeErr(w, http.StatusInternalServerError, err.Error())

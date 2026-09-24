@@ -39,6 +39,9 @@ const kindLabel: Record<string, string> = {
   saved_all: "收藏",
   chat_batch: "频道",
   chat_continue: "频道",
+  chat_range: "频道",
+  watch: "监听",
+  watch_saved: "监听",
 };
 
 function fromNow(iso: string): string {
@@ -53,9 +56,30 @@ function fromNow(iso: string): string {
 }
 
 function taskKind(t: RecentTask) {
-  if (t.kind) return kindLabel[t.kind] || t.kind;
+  // 优先 source：watch_saved 等 kind 会被归到 saved，但入口应按来源显示
   if (t.source) return kindLabel[t.source] || t.source;
+  if (t.kind) return kindLabel[t.kind] || t.kind;
   return "任务";
+}
+
+/** 失败/任务跳转到对应业务页 */
+function routeForTask(t: RecentTask) {
+  const src = t.source || t.kind || "";
+  switch (src) {
+    case "saved":
+    case "saved_all":
+      return "saved";
+    case "channel":
+    case "chat_continue":
+    case "chat_range":
+    case "chat_batch":
+      return "channels";
+    case "watch":
+    case "watch_saved":
+      return "watch";
+    default:
+      return "tasks";
+  }
 }
 
 function taskPct(t: RecentTask) {
@@ -75,7 +99,7 @@ function taskPct(t: RecentTask) {
       </n-button>
     </header>
     <ul v-if="tasks.length" class="task-list">
-      <li v-for="row in tasks" :key="row.id" class="task-row" @click="emit('navigate', 'tasks')">
+      <li v-for="row in tasks" :key="row.id" class="task-row" @click="emit('navigate', routeForTask(row))">
         <div class="task-main">
           <n-tag size="tiny" :bordered="false" class="task-kind">{{ taskKind(row) }}</n-tag>
           <div class="task-text">

@@ -9,6 +9,32 @@ import MediaViewer from "./components/MediaViewer.vue";
 
 defineOptions({ name: "LibraryView" });
 
+const FILTER_KEY = "tdload.library.filters";
+
+type SavedFilters = { chat?: string; mediaType?: string };
+
+function readSavedFilters(): SavedFilters {
+  try {
+    const raw = localStorage.getItem(FILTER_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as SavedFilters;
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function writeSavedFilters(chatVal: string, mediaVal: string) {
+  try {
+    localStorage.setItem(FILTER_KEY, JSON.stringify({ chat: chatVal, mediaType: mediaVal }));
+  } catch {
+    /* ignore quota / private mode */
+  }
+}
+
+const saved = readSavedFilters();
+const allowedMedia = new Set(["all", "image", "video"]);
+
 const { noImage } = useNoImage();
 const message = useMessage();
 const loading = ref(false);
@@ -17,8 +43,10 @@ const items = ref<LibraryItem[]>([]);
 const total = ref(0);
 const page = ref(1);
 const pageSize = 50;
-const chat = ref<string>("all");
-const mediaType = ref<string>("all");
+const chat = ref<string>(typeof saved.chat === "string" && saved.chat ? saved.chat : "all");
+const mediaType = ref<string>(
+  typeof saved.mediaType === "string" && allowedMedia.has(saved.mediaType) ? saved.mediaType : "all",
+);
 const mediaToken = ref("");
 const broken = ref<Record<number, boolean>>({});
 
@@ -59,10 +87,17 @@ function fileUrl(id: number) {
   return t ? `/api/library/${id}/file?token=${encodeURIComponent(t)}` : "";
 }
 
-function thumbSrc(it: LibraryItem) {
-  return withImagePlaceholder(fileUrl(it.id));
+/** 列表缩略图 / 视频封面 */
+function thumbUrl(id: number) {
+  const t = mediaToken.value || getToken();
+  return t ? `/api/library/${id}/thumb?token=${encodeURIComponent(t)}` : "";
 }
 
+function thumbSrc(it: LibraryItem) {
+  return withImagePlaceholder(thumbUrl(it.id));
+}
+
+/** 浏览页：始终用原文件 */
 function currentSrc() {
   if (!current.value) return "";
   if (current.value.mediaKind === "image") return withImagePlaceholder(fileUrl(current.value.id));
@@ -83,9 +118,20 @@ async function loadFilters() {
       }
     }
     filterOptions.value = opts;
+    // 缓存的频道若不在选项中，回退到全部
+    if (chat.value !== "all" && !opts.some((o) => o.value === chat.value)) {
+      chat.value = "all";
+      writeSavedFilters(chat.value, mediaType.value);
+    }
   } catch {
     /* keep default */
   }
+}
+
+function onFilterChange() {
+  page.value = 1;
+  writeSavedFilters(chat.value, mediaType.value);
+  void load();
 }
 
 async function load() {
@@ -145,8 +191,14 @@ async function removeItem(it: LibraryItem, withFile: boolean) {
   }
 }
 
-function onImgError(id: number) {
-  broken.value = { ...broken.value, [id]: true };
+function onThumbError(it: LibraryItem) {
+  // 图片缩略图失败 → 标坏；视频封面失败 → 回退到 metadata 帧
+  broken.value = { ...broken.value, [it.id]: true };
+}
+
+function videoFallbackSrc(it: LibraryItem) {
+  const u = fileUrl(it.id);
+  return u ? `${u}#t=0.1` : "";
 }
 
 function pauseVideo() {
@@ -227,19 +279,13 @@ onUnmounted(() => {
         v-model:value="chat"
         :options="filterOptions"
         class="filter-chat"
-        @update:value="
-          page = 1;
-          load();
-        "
+        @update:value="onFilterChange"
       />
       <n-select
         v-model:value="mediaType"
         :options="mediaOptions"
         class="filter-type"
-        @update:value="
-          page = 1;
-          load();
-        "
+        @update:value="onFilterChange"
       />
     </div>
 
@@ -255,10 +301,34 @@ onUnmounted(() => {
             @click="openViewer(it)"
           >
             <template v-if="it.mediaKind === 'image' && !broken[it.id]">
-              <img class="thumb" :src="thumbSrc(it)" :alt="it.fileName" @error="onImgError(it.id)" />
+              <img
+                class="thumb"
+                loading="lazy"
+                decoding="async"
+                :src="thumbSrc(it)"
+                :alt="it.fileName"
+                @error="onThumbError(it)"
+              />
             </template>
             <template v-else-if="it.mediaKind === 'video'">
               <div class="thumb video-thumb">
+                <img
+                  v-if="!broken[it.id]"
+                  class="thumb-cover"
+                  loading="lazy"
+                  decoding="async"
+                  :src="thumbSrc(it)"
+                  :alt="it.fileName"
+                  @error="onThumbError(it)"
+                />
+                <video
+                  v-else
+                  class="thumb-cover"
+                  muted
+                  playsinline
+                  preload="metadata"
+                  :src="videoFallbackSrc(it)"
+                />
                 <span class="play-badge" aria-hidden="true">
                   <n-icon size="28" :component="PlayOutline" />
                 </span>
@@ -371,7 +441,17 @@ h2 {
 }
 .video-thumb {
   position: relative;
+  width: 100%;
+  aspect-ratio: 1;
   background: #121218;
+  overflow: hidden;
+}
+.thumb-cover {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: cover;
+  background: #101014;
 }
 .play-badge {
   position: absolute;
@@ -379,8 +459,9 @@ h2 {
   display: flex;
   align-items: center;
   justify-content: center;
-  color: rgba(255, 255, 255, 0.85);
+  color: rgba(255, 255, 255, 0.9);
   pointer-events: none;
+  background: rgba(0, 0, 0, 0.18);
 }
 .thumb.placeholder {
   display: flex;

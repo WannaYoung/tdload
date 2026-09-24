@@ -12,6 +12,7 @@ type ProgressEv = {
   type?: string;
   kind?: string;
   taskId?: number;
+  phase?: string;
   done?: number;
   total?: number;
   status?: string;

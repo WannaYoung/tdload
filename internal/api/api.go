@@ -79,6 +79,7 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/library/sync", s.withAuth(s.handleLibrarySync))
 	mux.HandleFunc("DELETE /api/library/{id}", s.withAuth(s.handleDeleteLibrary))
 	mux.HandleFunc("GET /api/library/{id}/file", s.withFileAuth(s.handleLibraryFile))
+	mux.HandleFunc("GET /api/library/{id}/thumb", s.withFileAuth(s.handleLibraryThumb))
 	mux.HandleFunc("GET /api/watch", s.withAuth(s.handleListWatch))
 	mux.HandleFunc("GET /api/watch/candidates", s.withAuth(s.handleWatchCandidates))
 	mux.HandleFunc("POST /api/watch", s.withAuth(s.handleCreateWatch))
@@ -160,6 +161,7 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	msgActive, savedActive, channelActive, _ := s.DB.DashboardActiveByKind(r.Context())
+	failMsg, failSaved, failChannel, failWatch, _ := s.DB.DashboardFailedByKind(r.Context())
 	tgTotal, tgActive, tgExpired, _ := s.DB.TGAccountStatus(r.Context())
 	diskUsed, diskAvail, diskTotal := diskUsage(s.Cfg.DownloadDir)
 
@@ -186,6 +188,10 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 		"tasksQueued":          queued,
 		"tasksRunning":         running,
 		"tasksFailed":          failed,
+		"tasksFailedMessage":   failMsg,
+		"tasksFailedSaved":     failSaved,
+		"tasksFailedChannel":   failChannel,
+		"tasksFailedWatch":     failWatch,
 		"tasksPaused":          paused,
 		"tasksDone":            done,
 		"tasksMessageActive":   msgActive,

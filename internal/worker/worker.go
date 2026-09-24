@@ -171,11 +171,46 @@ func (w *Worker) runOne(parent context.Context, id int64) {
 				selfID = uid
 			}
 		}
+		if selfID == 0 {
+			err = fmt.Errorf("未登录 Telegram，无法同步收藏")
+			break
+		}
 		favID := tg.FavoritesChatID(selfID)
-		rows, err := w.DB.SQL.QueryContext(ctx, `SELECT message_id FROM saved_messages_cache WHERE tg_account_id=1 ORDER BY message_id`)
-		if err != nil {
-			_ = w.DB.UpdateTaskStatus(context.Background(), id, "failed", err.Error())
-			return
+
+		// 阶段 1：拉取最新收藏列表，刷新「收藏数」；此时「已同步」前端显示 —
+		_ = w.DB.PatchTaskOptions(ctx, id, map[string]any{"phase": "listing"})
+		w.Hub.Publish(progress.Event{
+			Type: "task_progress", Kind: "saved", TaskID: id, Phase: "listing", Status: "running",
+			Done: 0, Total: 0, Title: task.Title,
+		})
+		var lastListed int
+		n, syncErr := w.TG.SyncSaved(ctx, selfID, func(count int) {
+			if count == lastListed {
+				return
+			}
+			lastListed = count
+			bg := context.Background()
+			_ = w.DB.UpdateTaskProgress(bg, id, 0, count, 0, 0, 0)
+			w.Hub.Publish(progress.Event{
+				Type: "task_progress", Kind: "saved", TaskID: id, Phase: "listing", Status: "running",
+				Done: 0, Total: count, Title: task.Title,
+			})
+		})
+		if syncErr != nil {
+			err = syncErr
+			break
+		}
+		_ = w.DB.PatchTaskOptions(ctx, id, map[string]any{"phase": "downloading"})
+		_ = w.DB.UpdateTaskProgress(ctx, id, 0, n, 0, 0, 0)
+		w.Hub.Publish(progress.Event{
+			Type: "task_progress", Kind: "saved", TaskID: id, Phase: "downloading", Status: "running",
+			Done: 0, Total: n, Title: task.Title,
+		})
+
+		rows, qerr := w.DB.SQL.QueryContext(ctx, `SELECT message_id FROM saved_messages_cache WHERE tg_account_id=1 ORDER BY message_id`)
+		if qerr != nil {
+			err = qerr
+			break
 		}
 		var ids []int
 		for rows.Next() {
@@ -185,6 +220,10 @@ func (w *Worker) runOne(parent context.Context, id int64) {
 			}
 		}
 		rows.Close()
+		if len(ids) == 0 {
+			err = nil
+			break
+		}
 		opt := w.downloadOpts(id, tg.FavoritesFolderName, "saved")
 		baseOnItem := opt.OnItem
 		opt.OnItem = func(chatID int64, messageID int, status, fileName, localPath, errMsg string) {
@@ -254,6 +293,7 @@ func (w *Worker) runOne(parent context.Context, id int64) {
 		}
 		if totalFiles == 0 {
 			_ = w.DB.UpdateTaskStatus(context.Background(), id, "done", "没有需要下载的媒体")
+			_ = w.DB.PatchTaskOptions(context.Background(), id, map[string]any{"phase": "done"})
 			_ = w.DB.AddTaskLog(context.Background(), id, "info", "没有需要下载的媒体")
 			w.Hub.Publish(progress.Event{Type: "task_progress", Kind: kind, TaskID: id, Status: "done", Phase: "done", Done: 0, Total: 0})
 			slog.Info("task done (empty)", "id", id)
@@ -265,6 +305,7 @@ func (w *Worker) runOne(parent context.Context, id int64) {
 				msg = fmt.Sprintf("全部失败（%d）", counts.Failed)
 			}
 			_ = w.DB.UpdateTaskStatus(context.Background(), id, "failed", msg)
+			_ = w.DB.PatchTaskOptions(context.Background(), id, map[string]any{"phase": "failed"})
 			_ = w.DB.AddTaskLog(context.Background(), id, "error", msg)
 			w.Hub.Publish(progress.Event{Type: "task_progress", Kind: kind, TaskID: id, Status: "failed", Phase: "failed", Error: msg, Done: 0, Total: totalFiles})
 			slog.Error("task failed", "id", id, "err", msg)
@@ -279,6 +320,7 @@ func (w *Worker) runOne(parent context.Context, id int64) {
 		return
 	}
 	_ = w.DB.UpdateTaskStatus(context.Background(), id, "done", "")
+	_ = w.DB.PatchTaskOptions(context.Background(), id, map[string]any{"phase": "done"})
 	_ = w.DB.AddTaskLog(context.Background(), id, "info", "完成")
 	w.Hub.Publish(progress.Event{Type: "task_progress", Kind: kind, TaskID: id, Status: "done", Phase: "done", Done: doneFiles, Total: totalFiles})
 	slog.Info("task done", "id", id)

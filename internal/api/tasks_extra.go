@@ -1,7 +1,9 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -218,9 +220,10 @@ func taskViewEnriched(s *Server, r *http.Request, t *db.Task) map[string]any {
 	case "saved_all", "watch_saved":
 		v["kind"] = "saved"
 		if counts, err := s.DB.TaskItemCounts(r.Context(), t.ID); err == nil {
-			total := counts.Pending + counts.Downloading + counts.Done + counts.Skipped + counts.Failed
-			if total == 0 {
-				total = t.TotalFiles
+			itemTotal := counts.Pending + counts.Downloading + counts.Done + counts.Skipped + counts.Failed
+			total := t.TotalFiles
+			if total < itemTotal {
+				total = itemTotal
 			}
 			v["itemCounts"] = counts
 			v["progressDone"] = counts.Done + counts.Skipped
@@ -229,29 +232,138 @@ func taskViewEnriched(s *Server, r *http.Request, t *db.Task) map[string]any {
 	case "chat_continue", "chat_batch", "chat_range", "watch":
 		v["kind"] = "channel"
 		if counts, err := s.DB.TaskItemCounts(r.Context(), t.ID); err == nil {
+			itemTotal := counts.Pending + counts.Downloading + counts.Done + counts.Skipped + counts.Failed
+			total := t.TotalFiles
+			if total < itemTotal {
+				total = itemTotal
+			}
 			v["itemCounts"] = counts
 			v["progressDone"] = counts.Done + counts.Skipped
-			v["progressTotal"] = counts.Pending + counts.Downloading + counts.Done + counts.Skipped + counts.Failed
+			v["progressTotal"] = total
 		}
 	default:
 		v["kind"] = "message"
 	}
 	var opt map[string]any
 	_ = json.Unmarshal([]byte(t.OptionsJSON), &opt)
-	if chatID, ok := opt["chatId"].(float64); ok {
-		v["chatId"] = int64(chatID)
+	var chatID int64
+	if id, ok := opt["chatId"].(float64); ok {
+		chatID = int64(id)
+		v["chatId"] = chatID
 	}
-	if username, ok := opt["username"].(string); ok && strings.TrimSpace(username) != "" {
-		v["username"] = strings.TrimPrefix(strings.TrimSpace(username), "@")
+	username := ""
+	if u, ok := opt["username"].(string); ok && strings.TrimSpace(u) != "" {
+		username = strings.TrimPrefix(strings.TrimSpace(u), "@")
+		v["username"] = username
 	}
-	if chatTitle, ok := opt["chatTitle"].(string); ok && strings.TrimSpace(chatTitle) != "" {
-		v["chatTitle"] = strings.TrimSpace(chatTitle)
+	chatTitle := ""
+	if ct, ok := opt["chatTitle"].(string); ok {
+		chatTitle = strings.TrimSpace(ct)
 	}
-	if fromID, ok := opt["fromMessageId"].(float64); ok && fromID > 0 {
-		v["fromMessageId"] = int(fromID)
+	// 优先用对话 / 标签里的真实名称，避免展示 @username
+	if resolved := s.resolveChatDisplayName(r.Context(), chatID, username, chatTitle); resolved != "" {
+		chatTitle = resolved
+		v["chatTitle"] = chatTitle
+		if t.Source == "chat_continue" || t.Source == "chat_batch" || t.Source == "chat_range" || t.Source == "watch" {
+			v["title"] = rewriteTaskTitleWithChatName(t.Title, chatTitle, username)
+		}
+	} else if chatTitle != "" {
+		v["chatTitle"] = strings.TrimPrefix(chatTitle, "@")
 	}
-	if count, ok := opt["count"].(float64); ok && count > 0 {
-		v["count"] = int(count)
+	if phase, ok := opt["phase"].(string); ok && strings.TrimSpace(phase) != "" {
+		v["phase"] = strings.TrimSpace(phase)
+	}
+	if raw, ok := opt["fromMessageId"]; ok {
+		if n, ok := asInt(raw); ok && n >= 0 {
+			v["fromMessageId"] = n
+		}
+	} else if t.Source == "chat_continue" || t.Source == "chat_batch" || t.Source == "chat_range" || t.Source == "watch" {
+		// 旧批次未写入水位时，用本批最早消息 id 近似展示
+		if minID, err := s.DB.MinTaskItemMessageID(r.Context(), t.ID); err == nil && minID > 0 {
+			v["fromMessageId"] = minID
+		}
+	}
+	if raw, ok := opt["count"]; ok {
+		if n, ok := asInt(raw); ok && n > 0 {
+			v["count"] = n
+		}
 	}
 	return v
+}
+
+// resolveChatDisplayName 返回频道真实标题（不含 @username）。
+func (s *Server) resolveChatDisplayName(ctx context.Context, chatID int64, username, fallback string) string {
+	isBad := func(name string) bool {
+		name = strings.TrimSpace(name)
+		return name == "" || strings.HasPrefix(name, "@")
+	}
+	if chatID != 0 {
+		if d, _ := s.DB.GetTGDialog(ctx, db.DefaultTGAccountID, chatID); d != nil && !isBad(d.Title) {
+			return strings.TrimSpace(d.Title)
+		}
+		if label, _, ok := s.DB.GetChatLabel(ctx, chatID); ok && !isBad(label) {
+			return strings.TrimSpace(label)
+		}
+		if d, _ := s.DB.GetTGDialog(ctx, db.DefaultTGAccountID, chatID); d != nil && strings.TrimSpace(d.Title) != "" {
+			return strings.TrimPrefix(strings.TrimSpace(d.Title), "@")
+		}
+	}
+	fallback = strings.TrimSpace(strings.TrimPrefix(fallback, "@"))
+	if fallback != "" {
+		return fallback
+	}
+	uname := strings.TrimPrefix(strings.TrimSpace(username), "@")
+	if uname != "" {
+		return uname
+	}
+	if chatID != 0 {
+		return fmt.Sprintf("%d", chatID)
+	}
+	return ""
+}
+
+// rewriteTaskTitleWithChatName 把标题里的 @用户名 / 纯用户名换成真实频道名。
+func rewriteTaskTitleWithChatName(title, chatName, username string) string {
+	title = strings.TrimSpace(title)
+	chatName = strings.TrimSpace(chatName)
+	if title == "" || chatName == "" {
+		return title
+	}
+	uname := strings.TrimPrefix(strings.TrimSpace(username), "@")
+	shouldReplace := func(head string) bool {
+		head = strings.TrimSpace(head)
+		if head == "" {
+			return true
+		}
+		if strings.HasPrefix(head, "@") {
+			return true
+		}
+		bare := strings.TrimPrefix(head, "@")
+		if uname != "" && strings.EqualFold(bare, uname) && !strings.EqualFold(chatName, bare) {
+			return true
+		}
+		if _, err := strconv.ParseInt(head, 10, 64); err == nil {
+			return true
+		}
+		return false
+	}
+	if strings.HasPrefix(title, "监听 · ") {
+		rest := strings.TrimPrefix(title, "监听 · ")
+		parts := strings.SplitN(rest, " · ", 2)
+		if len(parts) == 2 && shouldReplace(parts[0]) {
+			return "监听 · " + chatName + " · " + parts[1]
+		}
+		if len(parts) == 1 && shouldReplace(parts[0]) {
+			return "监听 · " + chatName
+		}
+		return title
+	}
+	parts := strings.SplitN(title, " · ", 2)
+	if shouldReplace(parts[0]) {
+		if len(parts) == 2 {
+			return chatName + " · " + parts[1]
+		}
+		return chatName
+	}
+	return title
 }

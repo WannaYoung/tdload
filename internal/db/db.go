@@ -328,6 +328,20 @@ WHERE status IN ('queued','running')`).Scan(&message, &saved, &channel)
 	return
 }
 
+// DashboardFailedByKind 按入口统计失败任务数。
+// message→任务页；saved→收藏页；channel→频道页；watch→监听页。
+func (d *DB) DashboardFailedByKind(ctx context.Context) (message, saved, channel, watch int, err error) {
+	err = d.SQL.QueryRowContext(ctx, `
+SELECT
+  COALESCE(SUM(CASE WHEN source IN ('url') THEN 1 ELSE 0 END), 0),
+  COALESCE(SUM(CASE WHEN source IN ('saved_all') THEN 1 ELSE 0 END), 0),
+  COALESCE(SUM(CASE WHEN source IN ('chat_continue','chat_range','chat_batch') THEN 1 ELSE 0 END), 0),
+  COALESCE(SUM(CASE WHEN source IN ('watch','watch_saved') THEN 1 ELSE 0 END), 0)
+FROM tasks
+WHERE status='failed'`).Scan(&message, &saved, &channel, &watch)
+	return
+}
+
 func (d *DB) TGAccountStatus(ctx context.Context) (total, active, expired int, err error) {
 	err = d.SQL.QueryRowContext(ctx, `
 SELECT

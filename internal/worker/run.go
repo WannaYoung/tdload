@@ -16,13 +16,14 @@ func (w *Worker) downloadOpts(taskID int64, outSubdir, kind string) tg.DownloadO
 		kind = "message"
 	}
 	return tg.DownloadOptions{
-		OutDir:     w.Cfg.DownloadDir,
-		OutSubdir:  outSubdir,
-		Threads:    w.Cfg.Threads,
-		Template:   w.Cfg.Template,
-		GroupAlbum: w.Cfg.GroupAlbum,
-		SkipSame:   w.Cfg.SkipSame,
-		RewriteExt: w.Cfg.RewriteExt,
+		OutDir:      w.Cfg.DownloadDir,
+		OutSubdir:   outSubdir,
+		Threads:     w.Cfg.Threads,
+		Concurrency: w.Cfg.Concurrency,
+		Template:    w.Cfg.Template,
+		GroupAlbum:  w.Cfg.GroupAlbum,
+		SkipSame:    w.Cfg.SkipSame,
+		RewriteExt:  w.Cfg.RewriteExt,
 		Exists: func(chatID int64, messageID int, size int64) (bool, string, error) {
 			return w.DB.MediaExists(context.Background(), chatID, messageID, size)
 		},
@@ -68,8 +69,15 @@ func (w *Worker) publishTaskCounts(taskID int64, kind string) {
 	if err != nil {
 		return
 	}
-	total := counts.Pending + counts.Downloading + counts.Done + counts.Skipped + counts.Failed
+	itemTotal := counts.Pending + counts.Downloading + counts.Done + counts.Skipped + counts.Failed
 	done := counts.Done + counts.Skipped
+	total := itemTotal
+	// 收藏 / 频道：总数以扫描阶段写入的 total_files 为准，避免随已处理条目一起涨
+	if kind == "saved" || kind == "channel" {
+		if t, e := w.DB.GetTask(context.Background(), taskID); e == nil && t != nil && t.TotalFiles > total {
+			total = t.TotalFiles
+		}
+	}
 	_ = w.DB.UpdateTaskProgress(context.Background(), taskID, done, total, 0, 0, 0)
 	w.Hub.Publish(progress.Event{
 		Type: "task_progress", Kind: kind, TaskID: taskID, Phase: "downloading", Status: "running",
@@ -83,12 +91,13 @@ func (w *Worker) publishTaskCounts(taskID int64, kind string) {
 
 func (w *Worker) channelDownloadOpts(taskID int64) tg.DownloadOptions {
 	return tg.DownloadOptions{
-		OutDir:     w.Cfg.DownloadDir,
-		Threads:    w.Cfg.Threads,
-		Template:   w.Cfg.Template,
-		GroupAlbum: w.Cfg.GroupAlbum,
-		SkipSame:   w.Cfg.SkipSame,
-		RewriteExt: w.Cfg.RewriteExt,
+		OutDir:      w.Cfg.DownloadDir,
+		Threads:     w.Cfg.Threads,
+		Concurrency: w.Cfg.Concurrency,
+		Template:    w.Cfg.Template,
+		GroupAlbum:  w.Cfg.GroupAlbum,
+		SkipSame:    w.Cfg.SkipSame,
+		RewriteExt:  w.Cfg.RewriteExt,
 		Exists: func(chatID int64, messageID int, size int64) (bool, string, error) {
 			return w.DB.MediaExists(context.Background(), chatID, messageID, size)
 		},
@@ -169,6 +178,30 @@ func (w *Worker) runChatTask(ctx context.Context, task *db.Task) error {
 		}
 	}
 
+	publishListing := func(found int) {
+		bg := context.Background()
+		_ = w.DB.PatchTaskOptions(bg, task.ID, map[string]any{"phase": "listing"})
+		_ = w.DB.UpdateTaskProgress(bg, task.ID, 0, found, 0, 0, 0)
+		w.Hub.Publish(progress.Event{
+			Type: "task_progress", Kind: "channel", TaskID: task.ID, Phase: "listing", Status: "running",
+			Done: 0, Total: found,
+			ItemCounts: progress.ItemCounts{Pending: found},
+		})
+	}
+	publishReady := func(total int) {
+		bg := context.Background()
+		_ = w.DB.PatchTaskOptions(bg, task.ID, map[string]any{"phase": "downloading"})
+		_ = w.DB.UpdateTaskProgress(bg, task.ID, 0, total, 0, 0, 0)
+		w.Hub.Publish(progress.Event{
+			Type: "task_progress", Kind: "channel", TaskID: task.ID, Phase: "downloading", Status: "running",
+			Done: 0, Total: total,
+			ItemCounts: progress.ItemCounts{Pending: total},
+		})
+	}
+	dlOpt.OnScanProgress = publishListing
+	dlOpt.OnReadyToDownload = publishReady
+	publishListing(0)
+
 	// 重试失败项：只下载指定 message id，不推进扫描水位、不继续往后扫
 	if len(retryIDs) > 0 {
 		params := tg.ChatDownloadParams{
@@ -193,11 +226,16 @@ func (w *Worker) runChatTask(ctx context.Context, task *db.Task) error {
 	case "chat_continue":
 		mode = "continue"
 		afterID, _ = w.DB.GetScanCursor(ctx, db.DefaultTGAccountID, int64(chatID))
+		// 起始 = 本批开始时的扫描水位
+		_ = w.DB.PatchTaskOptions(ctx, task.ID, map[string]any{"fromMessageId": afterID})
 	case "chat_batch", "chat_range", "watch":
 		mode = "batch"
 		if task.Source == "watch" && count <= 0 && toID >= fromID && fromID > 0 {
 			count = toID - fromID + 1
 			countMsg = int(count)
+		}
+		if fromMsg > 0 {
+			_ = w.DB.PatchTaskOptions(ctx, task.ID, map[string]any{"fromMessageId": fromMsg})
 		}
 	}
 

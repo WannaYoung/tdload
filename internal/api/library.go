@@ -85,22 +85,7 @@ func (s *Server) handleListLibrary(w http.ResponseWriter, r *http.Request) {
 		if _, err := os.Stat(abs); err != nil {
 			continue
 		}
-		kind := "file"
-		if strings.HasPrefix(m.Mime, "image/") {
-			kind = "image"
-		} else if strings.HasPrefix(m.Mime, "video/") {
-			kind = "video"
-		} else {
-			lower := strings.ToLower(m.FileName)
-			switch {
-			case strings.HasSuffix(lower, ".jpg"), strings.HasSuffix(lower, ".jpeg"),
-				strings.HasSuffix(lower, ".png"), strings.HasSuffix(lower, ".webp"), strings.HasSuffix(lower, ".gif"):
-				kind = "image"
-			case strings.HasSuffix(lower, ".mp4"), strings.HasSuffix(lower, ".mkv"),
-				strings.HasSuffix(lower, ".mov"), strings.HasSuffix(lower, ".webm"):
-				kind = "video"
-			}
-		}
+		kind := library.DetectMediaKind(m.Mime, m.FileName)
 		items = append(items, map[string]any{
 			"id": m.ID, "chatId": m.ChatID, "messageId": m.MessageID,
 			"fileName": m.FileName, "size": m.Size, "mime": m.Mime,
@@ -193,6 +178,42 @@ func (s *Server) handleLibraryFile(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Cache-Control", "private, max-age=3600")
 	http.ServeFile(w, r, path)
+}
+
+// handleLibraryThumb 返回列表用缩略图（图片缩放；视频优先 ffmpeg 封面）。
+func (s *Server) handleLibraryThumb(w http.ResponseWriter, r *http.Request) {
+	id, err := pathID(r, "id")
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "无效 id")
+		return
+	}
+	row, err := s.DB.GetMedia(r.Context(), id)
+	if err != nil || row == nil {
+		writeErr(w, http.StatusNotFound, "索引不存在")
+		return
+	}
+	path, err := s.resolveMediaPath(row.LocalPath)
+	if err != nil {
+		writeErr(w, http.StatusNotFound, err.Error())
+		return
+	}
+	if _, err := os.Stat(path); err != nil {
+		writeErr(w, http.StatusNotFound, "文件未找到")
+		return
+	}
+	kind := library.DetectMediaKind(row.Mime, row.FileName)
+	if kind != "image" && kind != "video" {
+		writeErr(w, http.StatusUnsupportedMediaType, "不支持缩略图")
+		return
+	}
+	thumb, err := library.EnsureThumb(s.Cfg.DownloadDir, path, kind, row.ID)
+	if err != nil {
+		writeErr(w, http.StatusNotFound, err.Error())
+		return
+	}
+	w.Header().Set("Content-Type", "image/jpeg")
+	w.Header().Set("Cache-Control", "private, max-age=86400")
+	http.ServeFile(w, r, thumb)
 }
 
 // resolveMediaPath 将 media_index.local_path 解析为绝对路径，并限制在 download_dir 下。
