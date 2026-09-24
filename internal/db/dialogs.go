@@ -347,13 +347,15 @@ func (d *DB) MaxDownloadedMessageID(ctx context.Context, chatID int64) (int, err
 	return int(n.Int64), nil
 }
 
-// GetScanCursor 返回频道历史扫描水位：优先 chat_download_state，否则回退 media_index 最大 message id。
+// GetScanCursor 返回频道历史扫描水位。
+// 若已有 chat_download_state 记录则以其为准（含 0，表示从未推进）；
+// 仅在尚无状态记录时，回退为 media_index 最大 message id。
 func (d *DB) GetScanCursor(ctx context.Context, accountID, chatID int64) (int, error) {
 	var n sql.NullInt64
 	err := d.SQL.QueryRowContext(ctx, `
 SELECT last_downloaded_message_id FROM chat_download_state
 WHERE tg_account_id=? AND chat_id=?`, accountID, chatID).Scan(&n)
-	if err == nil && n.Valid && n.Int64 > 0 {
+	if err == nil && n.Valid {
 		return int(n.Int64), nil
 	}
 	if err != nil && err != sql.ErrNoRows {

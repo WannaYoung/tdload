@@ -52,11 +52,11 @@ const kindMeta: Record<
   },
 };
 
-const statusMeta: Record<string, { label: string; type: "default" | "success" | "info" | "warning" | "error" }> = {
-  idle: { label: "可继续", type: "info" },
-  running: { label: "下载中", type: "success" },
-  caught_up: { label: "已追平", type: "default" },
-  has_failed: { label: "有失败", type: "warning" },
+const statusMeta: Record<string, { label: string; color: string }> = {
+  idle: { label: "可继续", color: "#93c5fd" },
+  running: { label: "下载中", color: "var(--td-pink)" },
+  caught_up: { label: "已追平", color: "#86efac" },
+  has_failed: { label: "有失败", color: "#f87171" },
 };
 
 function isCustomRow(r: ChannelRow) {
@@ -171,7 +171,7 @@ const columns = computed<DataTableColumns<ChannelRow>>(() => [
     width: 90,
     render: (r) => {
       const meta = statusMeta[r.status || "idle"] || statusMeta.idle;
-      return h(NTag, { size: "small", bordered: false, type: meta.type }, { default: () => meta.label });
+      return h("span", { class: "status-text", style: { color: meta.color } }, meta.label);
     },
   },
   {
@@ -341,6 +341,11 @@ onMounted(() => void load());
   margin-top: 2px;
   font-size: 12px;
   color: rgba(255, 255, 255, 0.4);
+}
+:deep(.status-text) {
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
 }
 :deep(.row-actions) {
   display: inline-flex;

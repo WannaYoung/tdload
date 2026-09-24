@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"tdload/internal/db"
+	"tdload/internal/tg"
 )
 
 func (s *Server) handleChannelDownload(w http.ResponseWriter, r *http.Request) {
@@ -91,7 +92,8 @@ func (s *Server) handleChannelContinue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		Count int `json:"count"`
+		Count       int    `json:"count"`
+		ContentType string `json:"contentType"`
 	}
 	_ = jsonDecodeOptional(r, &body)
 	if body.Count <= 0 {
@@ -107,6 +109,7 @@ func (s *Server) handleChannelContinue(w http.ResponseWriter, r *http.Request) {
 	if body.Count > 5000 {
 		body.Count = 5000
 	}
+	contentType := tg.NormalizeContentType(body.ContentType)
 
 	d, err := s.DB.GetTGDialog(r.Context(), db.DefaultTGAccountID, chatID)
 	if err != nil || d == nil {
@@ -126,6 +129,7 @@ func (s *Server) handleChannelContinue(w http.ResponseWriter, r *http.Request) {
 	opt, _ := json.Marshal(map[string]any{
 		"chatId": chatID, "count": body.Count, "phase": "listing", "chatTitle": d.Title,
 		"fromMessageId": cursor, // 点击继续时的当前水位
+		"contentType":   contentType,
 	})
 	title := d.Title
 	if title == "" || strings.HasPrefix(strings.TrimSpace(title), "@") {

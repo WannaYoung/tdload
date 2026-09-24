@@ -24,7 +24,7 @@
 | **收藏页** | 整库同步到 `我的收藏/`；无扫描水位，只补缺失（`skip_same`） |
 | **频道页** | 已加入对话 + 自定义频道；覆盖进度、同步最新、继续下载；可调扫描水位；失败重试仅 ids、不推进水位 |
 | **任务页** | 消息链接入队（仅 `source=url`）；刷新 / 清除完成 / 删除单项 |
-| **资源库** | 已下载索引、筛选、缩略图 / 视频封面；扫盘只维护索引，**不改水位** |
+| **资源库** | 已下载索引、筛选、缩略图 / Telegram 视频封面；扫盘只维护索引，**不改水位** |
 | **监听** | 频道 / 群 / 收藏 / 自定义频道增量入队；内容类型筛选；添加前同步最新消息 ID |
 | 部署 | 单镜像 Docker，`linux/amd64` / `linux/arm64`；本机前后端分离调试 |
 
@@ -325,11 +325,13 @@ Telegram 页同步已加入对话后写入；自定义频道单独插入，`is_c
 |----|------|------|
 | tg_account_id | INTEGER FK | |
 | chat_id | INTEGER | |
-| last_downloaded_message_id | INTEGER | 扫描水位（已扫到的最大 message id） |
-| batch_size | INTEGER | 每批条数，默认 100 |
+| last_downloaded_message_id | INTEGER | 扫描水位（已扫过的最大 message id，不是「第 N 条媒体」） |
+| batch_size | INTEGER | 每批最多下载的媒体条数，默认 100 |
 | updated_at | TEXT | |
 
 主键：`(tg_account_id, chat_id)`。
+
+已有本表记录时，水位 **0 也有效**（表示尚未推进）；只有没有记录时才回退 `media_index` 最大 message id。不要用已下载文件的 message id 代替扫描水位。
 
 ### 6.11 `chat_labels`
 
@@ -357,7 +359,7 @@ Telegram 页同步已加入对话后写入；自定义频道单独插入，`is_c
 | `telegram` | Telegram | 登录 + 同步 + 计数 |
 | `saved` | 收藏 | 收藏整库同步（补缺失） |
 | `channels` | 频道 | 已加入 + 自定义；覆盖进度；新增 / 同步 / 下载 |
-| `channel-detail` | 频道详情 | 覆盖进度、继续下载、水位调整 / 对齐；自定义可删除 |
+| `channel-detail` | 频道详情 | 覆盖进度、每批媒体条数、内容筛选、继续下载；调整 / 对齐水位；自定义可删除 |
 | `tasks` | 任务 | 消息链接下载 |
 | `watch` | 监听 | 增量自动入队；内容类型筛选 |
 | `library` | 资源库 | 索引浏览、筛选、预览、扫盘 |
@@ -384,10 +386,12 @@ Telegram 页同步已加入对话后写入；自定义频道单独插入，`is_c
 
 **频道**
 
-- 列表：标题、`@username`、类型标签、覆盖进度、已下载数、状态
+- 列表：标题、`@username`、类型标签、覆盖进度、已下载数；状态为彩色文字（可继续蓝、下载中主色、已追平绿、有失败红）
 - 工具栏：**刷新 / 新增**；操作列图标：**同步**（最新消息）、**下载**（进详情）
 - 新增：`@名称` 或频道 ID；去重；无权限报中文错误；`is_custom=1`
-- 详情：覆盖进度、每批条数（默认 100）、**调整水位 / 对齐水位 / 继续下载**
+- 详情：标题右侧 **刷新 / 调整水位 / 对齐水位**；摘要为「已扫描到 / 最新」+ 已下载 + 状态标签 + 进度条；其下 **每批条数、下载内容、继续下载**
+- **每批条数**是本批最多下载的媒体条数（跳过无附件），不是消息 ID 区间 `1–N`。水位推进到本批扫过的最后一条 message id
+- **下载内容**与监听一致：全部 / 媒体 / 图片 / 视频，写入任务 `options.contentType`
 - 水位 API：`POST /api/channels/{chatId}/scan-cursor`，`mode=set` 或 `mode=align`
 - 进行中批次：暂停 / 继续 / 取消 / 重试（`Mode=ids`，不推进水位）；可清除完成批次
 - 自定义频道可删除；同频道同时只跑一批
@@ -404,8 +408,9 @@ Telegram 页同步已加入对话后写入；自定义频道单独插入，`is_c
 
 - 频道筛选：第一项固定「我的收藏」，其余为频道 / 群
 - 媒体类型：全部 / 图片 / 视频
-- 预览：列表缩略图 / 视频封面（`GET /api/library/{id}/thumb`，视频需 ffmpeg）；点击加载原文件（`/file`，视频 Range）
-- 扫盘补索引：只维护 `media_index`；**不改**水位；`cursorsUpdated` 恒为 0
+- 预览：`GET /api/library/{id}/thumb`。图片本地缩到最长边 360 的 JPEG。视频封面是 Telegram `document.thumbs`（取最大静态尺寸），下载成功或 `skip_same` 命中时写入 `{download_dir}/.tdload-thumbs/{chatId}_{messageId}_{size}.jpg`；浏览时缓存缺失则按 `chat_id` + `message_id` 补拉。无封面时接口 404，前端用 `<video>` 兜底。不依赖 ffmpeg
+- 点击加载原文件（`/file`，视频 Range）
+- 扫盘补索引：只维护 `media_index`；**不改**水位；`cursorsUpdated` 恒为 0。目录名 `{chatId}-{标题}` 或 `{chatId}_{标题}`；文件名 `{chatId}-{messageId}-{名}` 或下划线分隔，两种都能导入
 
 **监听**
 
@@ -498,7 +503,7 @@ web/
 | DELETE | `/api/channels/{chatId}` | 仅删除自定义频道 | 已实现 |
 | POST | `/api/channels/{chatId}/sync` | 刷新标题 / 用户名 / 最新消息 ID | 已实现 |
 | GET | `/api/channels/{chatId}/download` | 下载工作台摘要：覆盖进度、进行中任务、历史批次、`defaultBatchSize`、`isCustom` | 已实现 |
-| POST | `/api/channels/{chatId}/continue` | body `{ count }`：从水位向前扫一批入队；成功后记忆 `batch_size` | 已实现 |
+| POST | `/api/channels/{chatId}/continue` | body `{ count, contentType }`：从水位向前扫一批媒体入队（`contentType`：`all` / `media` / `image` / `video`，缺省 `all`）；成功后记忆 `batch_size` | 已实现 |
 | POST | `/api/channels/{chatId}/scan-cursor` | body `{ mode: "set", messageId }` 或 `{ mode: "align" }`：调整扫描水位 | 已实现 |
 | DELETE | `/api/channels/{chatId}/batches/completed` | 清除该频道已结束续下批次 | 已实现 |
 
@@ -560,7 +565,7 @@ message/saved 列表项可带 `itemsPreview`（当前页关联 items）或前端
 |--------|------|------|
 | `url` | 任务 · 消息下载 | 多行 `t.me` 链接 |
 | `saved_all` | 收藏页 · 同步 | 缓存全量 message id，`skip_same` 跳过已有；`out_subdir`: `我的收藏` |
-| `chat_continue` | 频道详情 · 继续下载 | 指定 `chat_id` + `count`，从水位向前扫 |
+| `chat_continue` | 频道详情 · 继续下载 | `chat_id` + `count`（媒体条数）+ 可选 `contentType`，从水位向前扫 |
 | `chat_batch` | （API 仍支持，控制台无入口） | `chat_id` + `from_message_id` + `count` |
 | `json` | （可选后续） | 导出 JSON |
 | `watch` / `watch_saved` | 监听自动入队 | 增量区间 |
@@ -607,10 +612,10 @@ message/saved 列表项可带 `itemsPreview`（当前页关联 items）或前端
 |------|------|------|------|
 | GET | `/api/library/filters` | 频道下拉：**第一项「我的收藏」**，其余对话（id + 标题） | 已实现 |
 | GET | `/api/library` | 列表；见下方 query | 已实现 |
-| POST | `/api/library/sync` | 扫盘补索引；只维护 `media_index`，`cursorsUpdated` 恒为 0 | 已实现 |
+| POST | `/api/library/sync` | 扫盘补索引；识别 `-` / `_` 分隔的频道目录与文件名；只维护 `media_index`，`cursorsUpdated` 恒为 0 | 已实现 |
 | DELETE | `/api/library/{id}` | 删索引（query: `delete_file=1`） | 已实现 |
 | GET | `/api/library/{id}/file` | 原文件流；浏览页原图 / 视频 Range 播放 | 已实现 |
-| GET | `/api/library/{id}/thumb` | 列表缩略图（图片缩放；视频 ffmpeg 封面，可缓存） | 已实现 |
+| GET | `/api/library/{id}/thumb` | 列表缩略图。图片本地缩放；视频读 `.tdload-thumbs` 缓存，缺失则向 Telegram 补拉 document thumb | 已实现 |
 | GET | `/api/about` | 版本号、许可证、源码链接（AGPL） | 已实现 |
 
 **`GET /api/library` query：**
@@ -842,7 +847,7 @@ server: {
 
 1. **web**：`node:22-alpine` → `pnpm build` → `dist/`  
 2. **builder**：`golang:1.26-bookworm` → `go build -o /out/tdload ./cmd/tdload`  
-3. **runtime**：`debian:bookworm-slim` + `ca-certificates` → 拷贝二进制与 `web/dist`
+3. **runtime**：`debian:bookworm-slim` + `ca-certificates`（不含 ffmpeg；视频封面走 Telegram thumb）→ 拷贝二进制与 `web/dist`
 
 环境默认：
 
@@ -933,12 +938,12 @@ services:
 | `internal/auth` | JWT / ticket / 管理员引导 |
 | `internal/api` | REST 路由 |
 | `internal/static` | SPA 静态托管 |
-| `internal/tg` | 登录、同步、下载（含并行文件）、自定义频道 |
+| `internal/tg` | 登录、同步、下载（含并行文件）、自定义频道、视频封面 |
 | `internal/worker` + `progress` | 任务调度与 SSE |
 | `internal/watcher` | 监听增量入队 + 内容类型 |
-| `internal/library` | 扫盘索引、缩略图 / 视频封面 |
+| `internal/library` | 扫盘索引、缩略图 / Telegram 视频封面缓存 |
 | `web` | Vue 控制台（深色 + 粉主色、宽窄屏布局） |
-| Docker | 多架构镜像 `wannayoung/tdload`，BIND `3080`；含 ffmpeg |
+| Docker | 多架构镜像 `wannayoung/tdload`，BIND `3080` |
 
 前端导航：仪表盘 · Telegram · 收藏 · 频道 · 任务 · 监听 · 资源库 · 设置（收藏 / 频道 / 任务按 kind 显示活跃徽标）。
 

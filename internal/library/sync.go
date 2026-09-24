@@ -13,8 +13,10 @@ import (
 	"time"
 
 	"tdload/internal/db"
-	"tdload/internal/tg"
 )
+
+// favoritesFolderName 与 tg.FavoritesFolderName 保持一致（避免 library↔tg 循环依赖）。
+const favoritesFolderName = "我的收藏"
 
 type SyncResult struct {
 	Kept            int `json:"kept"`
@@ -23,7 +25,7 @@ type SyncResult struct {
 	CursorsUpdated  int `json:"cursorsUpdated"`
 }
 
-var fileNamePattern = regexp.MustCompile(`^(-?\d+)_(\d+)_(.+)$`)
+var fileNamePattern = regexp.MustCompile(`^(-?\d+)[-_](\d+)[-_](.+)$`)
 
 // SyncDisk 清理失效索引并扫盘补入 media_index。
 func SyncDisk(ctx context.Context, database *db.DB, downloadDir string, favoritesChatID int64) (*SyncResult, error) {
@@ -134,23 +136,47 @@ func parseIndexedPath(rel string, favoritesChatID int64) (chatID int64, messageI
 		return 0, 0, "", false
 	}
 	fileName = m[3]
-	if folder == tg.FavoritesFolderName {
+	if folder == favoritesFolderName {
 		if favoritesChatID <= 0 {
 			return 0, 0, "", false
 		}
 		return favoritesChatID, msgID, fileName, true
 	}
-	// 目录名：{chatId}_{title}
-	us := strings.IndexByte(folder, '_')
-	idPart := folder
-	if us > 0 {
-		idPart = folder[:us]
-	}
-	cid, err := strconv.ParseInt(idPart, 10, 64)
-	if err != nil || cid == 0 {
+	// 目录名：{chatId}-{title} 或 {chatId}_{title}（与 tg.chatFolderName 一致）
+	cid, okID := parseChatFolderID(folder)
+	if !okID {
 		return 0, 0, "", false
 	}
 	return cid, msgID, fileName, true
+}
+
+// parseChatFolderID 从目录名解析 chat id（支持前导负号与 -/_ 分隔标题）。
+func parseChatFolderID(folder string) (int64, bool) {
+	folder = strings.TrimSpace(folder)
+	if folder == "" {
+		return 0, false
+	}
+	start := 0
+	if folder[0] == '-' {
+		start = 1
+	}
+	sep := -1
+	for i := start; i < len(folder); i++ {
+		c := folder[i]
+		if c == '-' || c == '_' {
+			sep = i
+			break
+		}
+	}
+	idPart := folder
+	if sep > 0 {
+		idPart = folder[:sep]
+	}
+	cid, err := strconv.ParseInt(idPart, 10, 64)
+	if err != nil || cid == 0 {
+		return 0, false
+	}
+	return cid, true
 }
 
 func resolveUnderRoot(root, localPath string) (string, bool) {

@@ -10,10 +10,12 @@ import {
   NInputNumber,
   NModal,
   NProgress,
+  NSelect,
   NSpin,
   NTag,
   useDialog,
   useMessage,
+  type SelectOption,
 } from "naive-ui";
 import {
   CloseOutline,
@@ -43,6 +45,14 @@ const clearing = ref(false);
 const deleting = ref(false);
 const cursorSaving = ref(false);
 const batchSize = ref(100);
+type ContentType = "all" | "media" | "image" | "video";
+const contentType = ref<ContentType>("all");
+const contentTypeOptions: SelectOption[] = [
+  { label: "全部", value: "all" },
+  { label: "媒体", value: "media" },
+  { label: "图片", value: "image" },
+  { label: "视频", value: "video" },
+];
 const info = ref<ChannelDownloadInfo | null>(null);
 const cursorModalOpen = ref(false);
 const cursorInput = ref<number | null>(null);
@@ -61,6 +71,16 @@ const statusLabel: Record<string, string> = {
   paused: "已暂停",
   caught_up: "已追平",
   has_failed: "有失败",
+};
+
+/** 与频道列表状态色一致，标签底色用同色半透明 */
+const statusTagColor: Record<string, { color: string; textColor: string; borderColor: string }> = {
+  idle: { color: "rgba(96, 165, 250, 0.16)", textColor: "#93c5fd", borderColor: "transparent" },
+  running: { color: "rgba(244, 114, 182, 0.16)", textColor: "#f472b6", borderColor: "transparent" },
+  queued: { color: "rgba(96, 165, 250, 0.16)", textColor: "#93c5fd", borderColor: "transparent" },
+  paused: { color: "rgba(251, 191, 36, 0.16)", textColor: "#fcd34d", borderColor: "transparent" },
+  caught_up: { color: "rgba(74, 222, 128, 0.14)", textColor: "#86efac", borderColor: "transparent" },
+  has_failed: { color: "rgba(248, 113, 113, 0.16)", textColor: "#f87171", borderColor: "transparent" },
 };
 
 const taskStatusLabel: Record<string, string> = {
@@ -232,7 +252,7 @@ async function continueDownload() {
   try {
     await api(`/api/channels/${chatId.value}/continue`, {
       method: "POST",
-      body: JSON.stringify({ count: batchSize.value || 100 }),
+      body: JSON.stringify({ count: batchSize.value || 100, contentType: contentType.value }),
     });
     message.success("已开始继续下载");
     await load();
@@ -435,20 +455,39 @@ onUnmounted(() => {
 <template>
   <div class="page">
     <header class="head">
-      <div>
+      <div class="head-main">
         <n-button quaternary size="small" @click="router.push({ name: 'channels' })">← 频道列表</n-button>
-        <h2>{{ info?.title || `频道 ${chatId}` }}</h2>
-        <p v-if="info?.username" class="sub">@{{ info.username }}</p>
+        <div class="title-row">
+          <h2>
+            {{ info?.title || `频道 ${chatId}` }}
+            <span v-if="info?.username" class="title-at">@{{ info.username }}</span>
+          </h2>
+          <div class="title-actions">
+            <n-button size="small" :loading="loading" @click="() => load()">
+              <template #icon>
+                <n-icon :component="RefreshOutline" />
+              </template>
+              刷新
+            </n-button>
+            <template v-if="info">
+              <n-button size="small" @click="openCursorModal">
+                <template #icon>
+                  <n-icon :component="PulseOutline" />
+                </template>
+                调整水位
+              </n-button>
+              <n-button size="small" type="primary" ghost :loading="cursorSaving" @click="alignCursor">
+                <template #icon>
+                  <n-icon :component="SyncOutline" />
+                </template>
+                对齐水位
+              </n-button>
+            </template>
+          </div>
+        </div>
       </div>
-      <div class="head-actions">
-        <n-button :loading="loading" @click="() => load()">
-          <template #icon>
-            <n-icon :component="RefreshOutline" />
-          </template>
-          刷新
-        </n-button>
+      <div v-if="isCustom" class="head-actions">
         <n-button
-          v-if="isCustom"
           type="error"
           secondary
           :loading="deleting"
@@ -467,41 +506,36 @@ onUnmounted(() => {
       <template v-else-if="info">
         <section class="summary">
           <div class="summary-top">
-            <div>
-              <div class="label">覆盖进度</div>
-              <div class="coverage">{{ coverageText() }}</div>
+            <div class="summary-meta">
+              <span class="coverage">{{ coverageText() }}</span>
+              <span class="stat">已下载 <b>{{ info.downloadedCount }}</b></span>
+              <span v-if="info.failedCount" class="stat">失败项 <b class="warn">{{ info.failedCount }}</b></span>
             </div>
-            <n-tag size="small" :bordered="false" type="info">
+            <n-tag
+              size="small"
+              :bordered="false"
+              :color="statusTagColor[info.status] || statusTagColor.idle"
+            >
               {{ statusLabel[info.status] || info.status }}
             </n-tag>
           </div>
           <n-progress type="line" :percentage="coveragePct()" :show-indicator="true" />
-          <div class="stats">
-            <span>已下载媒体 <b>{{ info.downloadedCount }}</b></span>
-            <span v-if="info.failedCount">失败项 <b class="warn">{{ info.failedCount }}</b></span>
-          </div>
-          <div class="actions">
-            <div class="batch-setting">
-              <span>每批条数</span>
-              <n-input-number v-model:value="batchSize" :min="50" :max="5000" :step="50" size="small" />
+          <div class="download-row">
+            <div class="batch-params">
+              <div class="field">
+                <span class="field-label">每批条数</span>
+                <n-input-number v-model:value="batchSize" :min="50" :max="5000" :step="50" size="small" />
+              </div>
+              <div class="field">
+                <span class="field-label">下载内容</span>
+                <n-select
+                  v-model:value="contentType"
+                  class="content-type"
+                  size="small"
+                  :options="contentTypeOptions"
+                />
+              </div>
             </div>
-            <n-button @click="openCursorModal">
-              <template #icon>
-                <n-icon :component="PulseOutline" />
-              </template>
-              调整水位
-            </n-button>
-            <n-button
-              type="primary"
-              ghost
-              :loading="cursorSaving"
-              @click="alignCursor"
-            >
-              <template #icon>
-                <n-icon :component="SyncOutline" />
-              </template>
-              对齐水位
-            </n-button>
             <n-button
               type="primary"
               :loading="submitting"
@@ -705,8 +739,24 @@ onUnmounted(() => {
   margin-bottom: 16px;
 }
 .head h2 {
-  margin: 8px 0 0;
+  margin: 0;
   font-size: 22px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+}
+.head-main {
+  min-width: 0;
+  flex: 1;
+}
+.title-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px 12px;
+  margin-top: 8px;
 }
 .head-actions {
   display: flex;
@@ -715,10 +765,19 @@ onUnmounted(() => {
   gap: 8px;
   flex-shrink: 0;
 }
-.sub {
-  margin: 4px 0 0;
+.title-at {
+  font-size: 14px;
+  font-weight: 400;
   color: rgba(255, 255, 255, 0.45);
-  font-size: 13px;
+}
+.title-actions {
+  display: inline-flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-shrink: 0;
+  margin-left: auto;
 }
 .summary {
   padding: 16px;
@@ -730,48 +789,60 @@ onUnmounted(() => {
 .summary-top {
   display: flex;
   justify-content: space-between;
-  align-items: flex-start;
+  align-items: center;
   gap: 12px;
-  margin-bottom: 12px;
+  margin-bottom: 17px;
 }
-.label {
-  font-size: 12px;
-  color: rgba(255, 255, 255, 0.45);
-  margin-bottom: 4px;
+.summary-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 12px 16px;
+  min-width: 0;
 }
 .coverage {
   font-size: 16px;
   font-weight: 600;
   color: rgba(255, 255, 255, 0.92);
 }
-.stats {
-  display: flex;
-  gap: 16px;
-  margin: 12px 0;
+.stat {
   font-size: 13px;
   color: rgba(255, 255, 255, 0.55);
 }
-.stats b {
+.stat b {
   color: rgba(255, 255, 255, 0.9);
   font-weight: 600;
 }
 .warn {
   color: #fca5a5 !important;
 }
-.actions {
+.download-row {
   display: flex;
   flex-wrap: wrap;
-  gap: 10px;
-  align-items: center;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 14px;
 }
-.batch-setting {
+.batch-params {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 12px 16px;
+}
+.field {
   display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 13px;
-  color: rgba(255, 255, 255, 0.65);
+  flex-direction: column;
+  gap: 6px;
 }
-.batch-setting :deep(.n-input-number) {
+.field-label {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.45);
+}
+.field :deep(.n-input-number) {
+  width: 120px;
+}
+.content-type {
   width: 120px;
 }
 .sec-title {

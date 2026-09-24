@@ -180,7 +180,7 @@ func (s *Server) handleLibraryFile(w http.ResponseWriter, r *http.Request) {
 	http.ServeFile(w, r, path)
 }
 
-// handleLibraryThumb 返回列表用缩略图（图片缩放；视频优先 ffmpeg 封面）。
+// handleLibraryThumb 返回列表用缩略图（图片本地缩放；视频用 Telegram 封面缓存，缺失时按需补拉）。
 func (s *Server) handleLibraryThumb(w http.ResponseWriter, r *http.Request) {
 	id, err := pathID(r, "id")
 	if err != nil {
@@ -206,7 +206,12 @@ func (s *Server) handleLibraryThumb(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusUnsupportedMediaType, "不支持缩略图")
 		return
 	}
-	thumb, err := library.EnsureThumb(s.Cfg.DownloadDir, path, kind, row.ID)
+	thumb, err := library.EnsureThumb(s.Cfg.DownloadDir, path, kind, row.ChatID, row.MessageID, row.Size)
+	if err != nil && kind == "video" && s.TG != nil {
+		if p, ferr := s.TG.EnsureVideoThumb(r.Context(), row.ChatID, row.MessageID, row.Size, row.Mime, row.FileName); ferr == nil {
+			thumb, err = p, nil
+		}
+	}
 	if err != nil {
 		writeErr(w, http.StatusNotFound, err.Error())
 		return

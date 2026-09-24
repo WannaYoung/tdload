@@ -257,6 +257,7 @@ func (m *Manager) DownloadSaved(ctx context.Context, opt DownloadOptions, favori
 
 			type fileJob struct {
 				msgID int
+				msg   *tg.Message
 				name  string
 				path  string
 				size  int64
@@ -293,6 +294,7 @@ func (m *Manager) DownloadSaved(ctx context.Context, opt DownloadOptions, favori
 					if exists, path, err := opt.Exists(favoritesChatID, mid, size); err == nil && exists {
 						cb.item(favoritesChatID, mid, "skipped", file.Name, path, "")
 						_ = cb.file(favoritesChatID, mid, file.Name, size, path, file.MIMEType)
+						saveVideoThumb(ctx, api, dl, opt.OutDir, favoritesChatID, mid, size, file.MIMEType, file.Name, msg)
 						bumpDone(&done, total, file.Name+" (已存在)", cb)
 						continue
 					}
@@ -311,7 +313,7 @@ func (m *Manager) DownloadSaved(ctx context.Context, opt DownloadOptions, favori
 					continue
 				}
 				toFetch = append(toFetch, fileJob{
-					msgID: mid, name: name, path: path, size: size, mime: file.MIMEType, loc: file.Location,
+					msgID: mid, msg: msg, name: name, path: path, size: size, mime: file.MIMEType, loc: file.Location,
 				})
 			}
 
@@ -348,6 +350,7 @@ func (m *Manager) DownloadSaved(ctx context.Context, opt DownloadOptions, favori
 						}
 					}
 					_ = cb.file(favoritesChatID, fj.msgID, fj.name, size, fj.path, fj.mime)
+					saveVideoThumb(egCtx, api, dl, opt.OutDir, favoritesChatID, fj.msgID, size, fj.mime, fj.name, fj.msg)
 					cb.item(favoritesChatID, fj.msgID, "done", fj.name, fj.path, "")
 					bumpDone(&done, total, fj.name, cb)
 					return nil

@@ -2,16 +2,12 @@ package library
 
 import (
 	"bytes"
-	"context"
 	"fmt"
 	"image"
 	"image/jpeg"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
-	"time"
 
 	"golang.org/x/image/draw"
 	_ "golang.org/x/image/webp"
@@ -21,47 +17,64 @@ import (
 
 const thumbMaxSide = 360
 
-// ThumbCachePath 返回缩略图缓存路径：{downloadDir}/.tdload-thumbs/{id}_{mtime}_{size}.jpg
-func ThumbCachePath(downloadDir string, mediaID int64, mtimeUnix, size int64) string {
-	name := fmt.Sprintf("%d_%d_%d.jpg", mediaID, mtimeUnix, size)
+// ThumbCachePath 返回缩略图缓存路径：{downloadDir}/.tdload-thumbs/{chatID}_{messageID}_{size}.jpg
+// 键与 media_index 唯一约束一致，下载时可直接写入，无需等待 DB id。
+func ThumbCachePath(downloadDir string, chatID int64, messageID int, size int64) string {
+	name := fmt.Sprintf("%d_%d_%d.jpg", chatID, messageID, size)
 	return filepath.Join(downloadDir, ".tdload-thumbs", name)
 }
 
 // EnsureThumb 生成或复用缩略图，返回 JPEG 文件路径。
 // kind: image | video
-func EnsureThumb(downloadDir, srcPath, kind string, mediaID int64) (string, error) {
-	st, err := os.Stat(srcPath)
-	if err != nil {
-		return "", err
-	}
-	cache := ThumbCachePath(downloadDir, mediaID, st.ModTime().Unix(), st.Size())
+// 视频封面依赖下载时写入的 Telegram document thumb；EnsureThumb 仅读缓存，
+// 缺失时由 API 调用 Manager.EnsureVideoThumb 按需补拉。
+func EnsureThumb(downloadDir, srcPath, kind string, chatID int64, messageID int, size int64) (string, error) {
+	cache := ThumbCachePath(downloadDir, chatID, messageID, size)
 	if info, err := os.Stat(cache); err == nil && info.Size() > 0 {
 		return cache, nil
+	}
+	if kind == "video" {
+		return "", fmt.Errorf("无视频封面缓存")
 	}
 	if err := os.MkdirAll(filepath.Dir(cache), 0o755); err != nil {
 		return "", err
 	}
 	tmp := cache + ".tmp"
 	defer func() { _ = os.Remove(tmp) }()
-
-	switch kind {
-	case "video":
-		if err := extractVideoFrame(srcPath, tmp); err != nil {
-			return "", err
-		}
-		// 视频帧再压成列表缩略图尺寸
-		if err := writeImageThumb(tmp, tmp); err != nil {
-			return "", err
-		}
-	default:
-		if err := writeImageThumb(srcPath, tmp); err != nil {
-			return "", err
-		}
+	if err := writeImageThumb(srcPath, tmp); err != nil {
+		return "", err
 	}
 	if err := os.Rename(tmp, cache); err != nil {
 		return "", err
 	}
 	return cache, nil
+}
+
+// InstallVideoThumb 将已下载的 Telegram 封面（任意图片）压成列表缩略图并写入缓存。
+func InstallVideoThumb(downloadDir string, chatID int64, messageID int, size int64, srcPath string) error {
+	if size <= 0 || messageID <= 0 {
+		return fmt.Errorf("无效封面键")
+	}
+	cache := ThumbCachePath(downloadDir, chatID, messageID, size)
+	if info, err := os.Stat(cache); err == nil && info.Size() > 0 {
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(cache), 0o755); err != nil {
+		return err
+	}
+	tmp := cache + ".tmp"
+	defer func() { _ = os.Remove(tmp) }()
+	if err := writeImageThumb(srcPath, tmp); err != nil {
+		return err
+	}
+	return os.Rename(tmp, cache)
+}
+
+// HasVideoThumb 判断视频封面缓存是否已存在。
+func HasVideoThumb(downloadDir string, chatID int64, messageID int, size int64) bool {
+	cache := ThumbCachePath(downloadDir, chatID, messageID, size)
+	info, err := os.Stat(cache)
+	return err == nil && info.Size() > 0
 }
 
 func writeImageThumb(srcPath, dstPath string) error {
@@ -81,7 +94,6 @@ func writeImageThumb(srcPath, dstPath string) error {
 	}
 	maxSide := thumbMaxSide
 	if w <= maxSide && h <= maxSide {
-		// 已足够小：仍编码为 jpeg 统一缓存格式
 		return encodeJPEG(dstPath, img, 82)
 	}
 	scale := float64(maxSide) / float64(w)
@@ -109,31 +121,6 @@ func encodeJPEG(path string, img image.Image, quality int) error {
 	return os.WriteFile(path, buf.Bytes(), 0o644)
 }
 
-func extractVideoFrame(src, dst string) error {
-	ffmpeg, err := exec.LookPath("ffmpeg")
-	if err != nil {
-		return fmt.Errorf("未安装 ffmpeg")
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, ffmpeg,
-		"-hide_banner", "-loglevel", "error",
-		"-y",
-		"-ss", "0.5",
-		"-i", src,
-		"-frames:v", "1",
-		"-q:v", "4",
-		dst,
-	)
-	if err := cmd.Run(); err != nil {
-		return err
-	}
-	if st, err := os.Stat(dst); err != nil || st.Size() == 0 {
-		return fmt.Errorf("视频封面生成失败")
-	}
-	return nil
-}
-
 // DetectMediaKind 根据 mime / 扩展名判断 image|video|file。
 func DetectMediaKind(mime, fileName string) string {
 	if strings.HasPrefix(mime, "image/") {
@@ -155,8 +142,8 @@ func DetectMediaKind(mime, fileName string) string {
 	}
 }
 
-// PurgeStaleThumbs 可选：清理过期缩略图缓存（按文件名前缀 mediaID）。
-func PurgeStaleThumbs(downloadDir string, keepIDs map[int64]struct{}) {
+// PurgeStaleThumbs 清理不在 keep 集合中的缩略图（键：chatID_messageID_size）。
+func PurgeStaleThumbs(downloadDir string, keepKeys map[string]struct{}) {
 	dir := filepath.Join(downloadDir, ".tdload-thumbs")
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -167,16 +154,14 @@ func PurgeStaleThumbs(downloadDir string, keepIDs map[int64]struct{}) {
 			continue
 		}
 		name := e.Name()
-		under := strings.IndexByte(name, '_')
-		if under <= 0 {
-			continue
-		}
-		id, err := strconv.ParseInt(name[:under], 10, 64)
-		if err != nil {
-			continue
-		}
-		if _, ok := keepIDs[id]; !ok {
+		key := strings.TrimSuffix(name, filepath.Ext(name))
+		if _, ok := keepKeys[key]; !ok {
 			_ = os.Remove(filepath.Join(dir, name))
 		}
 	}
+}
+
+// ThumbKey 返回与 ThumbCachePath 文件名主体一致的键。
+func ThumbKey(chatID int64, messageID int, size int64) string {
+	return fmt.Sprintf("%d_%d_%d", chatID, messageID, size)
 }

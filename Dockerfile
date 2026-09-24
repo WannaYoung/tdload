@@ -20,7 +20,7 @@ RUN go build -trimpath -ldflags="-s -w -X tdload/internal/version.Version=${VERS
 
 FROM debian:bookworm-slim
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates ffmpeg \
+    && apt-get install -y --no-install-recommends ca-certificates \
     && rm -rf /var/lib/apt/lists/* \
     && mkdir -p /tdload/config/session /tdload/downloads /app/web
 WORKDIR /app

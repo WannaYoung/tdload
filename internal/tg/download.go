@@ -173,6 +173,7 @@ func (m *Manager) DownloadURLs(ctx context.Context, opt DownloadOptions) error {
 			chatID   int64
 			chatName string
 			msgID    int
+			msg      *tg.Message
 			name     string
 			path     string
 			size     int64
@@ -200,6 +201,7 @@ func (m *Manager) DownloadURLs(ctx context.Context, opt DownloadOptions) error {
 				if exists, path, err := opt.Exists(j.chatID, j.msgID, size); err == nil && exists {
 					cb.item(j.chatID, j.msgID, "skipped", file.Name, path, "")
 					_ = cb.file(j.chatID, j.msgID, file.Name, size, path, file.MIMEType)
+					saveVideoThumb(ctx, api, dl, opt.OutDir, j.chatID, j.msgID, size, file.MIMEType, file.Name, j.msg)
 					saved.Add(1)
 					bumpDone(&done, total, file.Name+" (已存在)", cb)
 					continue
@@ -225,7 +227,7 @@ func (m *Manager) DownloadURLs(ctx context.Context, opt DownloadOptions) error {
 				continue
 			}
 			toFetch = append(toFetch, fileJob{
-				chatID: j.chatID, chatName: j.chatName, msgID: j.msgID,
+				chatID: j.chatID, chatName: j.chatName, msgID: j.msgID, msg: j.msg,
 				name: name, path: path, size: size, mime: file.MIMEType, loc: file.Location,
 			})
 		}
@@ -265,6 +267,7 @@ func (m *Manager) DownloadURLs(ctx context.Context, opt DownloadOptions) error {
 				if err := cb.file(fj.chatID, fj.msgID, fj.name, size, fj.path, fj.mime); err != nil {
 					slog.Warn("index media", "err", err)
 				}
+				saveVideoThumb(egCtx, api, dl, opt.OutDir, fj.chatID, fj.msgID, size, fj.mime, fj.name, fj.msg)
 				cb.item(fj.chatID, fj.msgID, "done", fj.name, fj.path, "")
 				saved.Add(1)
 				bumpDone(&done, total, fj.name, cb)
