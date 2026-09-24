@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { nextTick, ref, watch } from "vue";
+import { useI18n } from "vue-i18n";
 import { NButton, NIcon } from "naive-ui";
 import { ChevronBackOutline, ChevronForwardOutline, CloseOutline } from "@vicons/ionicons5";
 import type { LibraryItem } from "../../../api/types";
@@ -25,6 +26,7 @@ const emit = defineEmits<{
   touchEnd: [e: TouchEvent];
 }>();
 
+const { t } = useI18n();
 const videoEl = ref<HTMLVideoElement | null>(null);
 
 watch(
@@ -54,12 +56,12 @@ defineExpose({ pauseVideo: () => { try { videoEl.value?.pause(); } catch { /* */
           <template #icon>
             <n-icon :component="CloseOutline" />
           </template>
-          关闭
+          {{ t("common.close") }}
         </n-button>
         <h1 class="viewer-title" :title="item.fileName">{{ item.fileName }}</h1>
         <div class="viewer-actions">
-          <n-button size="small" quaternary @click="emit('removeIndex')">删索引</n-button>
-          <n-button size="small" quaternary type="error" @click="emit('removeFile')">删文件</n-button>
+          <n-button size="small" quaternary @click="emit('removeIndex')">{{ t("mediaViewer.removeIndex") }}</n-button>
+          <n-button size="small" quaternary type="error" @click="emit('removeFile')">{{ t("mediaViewer.removeFile") }}</n-button>
           <span class="viewer-counter">{{ counter }}</span>
         </div>
       </header>
@@ -69,7 +71,7 @@ defineExpose({ pauseVideo: () => { try { videoEl.value?.pause(); } catch { /* */
           class="viewer-nav prev"
           type="button"
           :disabled="index <= 0"
-          aria-label="上一项"
+          :aria-label="t('mediaViewer.prev')"
           @click="emit('prev')"
         >
           <n-icon size="28" :component="ChevronBackOutline" />
@@ -101,7 +103,7 @@ defineExpose({ pauseVideo: () => { try { videoEl.value?.pause(); } catch { /* */
           class="viewer-nav next"
           type="button"
           :disabled="index >= total - 1"
-          aria-label="下一项"
+          :aria-label="t('mediaViewer.next')"
           @click="emit('next')"
         >
           <n-icon size="28" :component="ChevronForwardOutline" />

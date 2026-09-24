@@ -45,7 +45,7 @@
 |----|------|
 | 后端 | Go 单体：HTTP API + Worker + Watcher，单二进制 |
 | Telegram | `github.com/iyear/tdl/core` + `gotd`；下载对齐 tdl `pkg/downloader` 的 Iter / Progress |
-| 前端 | Vue 3 + Vite + Naive UI + Pinia + Vue Router（深色 + 粉主色 `#f472b6`） |
+| 前端 | Vue 3 + Vite + Naive UI + Pinia + Vue Router + **vue-i18n**（深色 + 粉主色 `#f472b6`；中/英，跟随浏览器，可切换并写入 `localStorage`） |
 | 数据库 | SQLite（文件落在配置卷，单容器友好） |
 | 配置 | YAML 运行时配置 + 环境变量机密 |
 | 鉴权 | 单用户 JWT Bearer；媒体流可用短时 ticket（勿把会话 JWT 放进 URL） |
@@ -446,14 +446,23 @@ web/
 ├── vite.config.ts          # dev proxy → 后端
 ├── src/
 │   ├── api/                # http.ts + types
+│   ├── i18n/               # vue-i18n：zh-CN / en-US；检测浏览器语言；localStorage 键 tdload-locale
+│   ├── components/         # LanguageSwitcher 等
 │   ├── stores/             # auth
 │   ├── router/
-│   ├── layouts/            # AppLayout（侧栏徽标按 kind）
+│   ├── layouts/            # AppLayout（侧栏徽标按 kind；宽屏退出旁 / 窄屏菜单旁语言切换）
 │   ├── views/              # Login / Dashboard / Telegram / Saved / Channels /
 │   │                       # ChannelDetail / Tasks / Watch / Library / Settings
 │   ├── composables/        # useAppEvents（共享 SSE）、useMobile、useNoImage
 │   └── main.ts
 ```
+
+**界面语言：**
+
+- 文案：`src/i18n/locales/zh-CN.ts`、`en-US.ts`；Naive UI 的 `locale` / `date-locale` 随当前语言切换
+- 默认：`navigator.languages` / `language` 以 `zh` 开头 → `zh-CN`，否则 `en-US`
+- 持久化：`localStorage['tdload-locale']`（`zh-CN` | `en-US`）
+- 入口：登录页右上角；登录后宽屏在退出按钮左侧、窄屏在右上角菜单左侧
 
 本地：浏览器打开 `http://127.0.0.1:3080`（Vite）；Docker：`http://127.0.0.1:3080`（同源托管静态资源）。
 
@@ -872,8 +881,8 @@ WEB_DIR=/app/web
 docker buildx create --use --name tdload-builder || true
 docker buildx build \
   --platform linux/amd64,linux/arm64 \
-  --build-arg VERSION=0.1.5 \
-  -t wannayoung/tdload:0.1.5 \
+  --build-arg VERSION=0.1.6 \
+  -t wannayoung/tdload:0.1.6 \
   -t wannayoung/tdload:latest \
   --push .
 ```
@@ -942,10 +951,10 @@ services:
 | `internal/worker` + `progress` | 任务调度与 SSE |
 | `internal/watcher` | 监听增量入队 + 内容类型 |
 | `internal/library` | 扫盘索引、缩略图 / Telegram 视频封面缓存 |
-| `web` | Vue 控制台（深色 + 粉主色、宽窄屏布局） |
+| `web` | Vue 控制台（深色 + 粉主色、宽窄屏布局、中/英 vue-i18n） |
 | Docker | 多架构镜像 `wannayoung/tdload`，BIND `3080` |
 
-前端导航：仪表盘 · Telegram · 收藏 · 频道 · 任务 · 监听 · 资源库 · 设置（收藏 / 频道 / 任务按 kind 显示活跃徽标）。
+前端导航：仪表盘 · Telegram · 收藏 · 频道 · 任务 · 监听 · 资源库 · 设置（收藏 / 频道 / 任务按 kind 显示活跃徽标）。语言切换见 §7.4。
 
 ---
 

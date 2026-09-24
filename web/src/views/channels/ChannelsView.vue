@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, h, onMounted, ref } from "vue";
+import { useI18n } from "vue-i18n";
 import { useRouter } from "vue-router";
 import {
   NButton,
@@ -18,6 +19,7 @@ import { api } from "../../api/http";
 import type { ChannelRow } from "../../api/types";
 import ChannelCoverageBar from "./components/ChannelCoverageBar.vue";
 
+const { t } = useI18n();
 const router = useRouter();
 const message = useMessage();
 const loading = ref(false);
@@ -30,34 +32,33 @@ const pageSize = 20;
 const total = ref(0);
 const rows = ref<ChannelRow[]>([]);
 
-const kindMeta: Record<
-  string,
-  { label: string; color: { color: string; textColor: string; borderColor: string } }
-> = {
+const kindMeta = computed<
+  Record<string, { label: string; color: { color: string; textColor: string; borderColor: string } }>
+>(() => ({
   channel: {
-    label: "频道",
+    label: t("kind.channel"),
     color: { color: "rgba(244, 114, 182, 0.16)", textColor: "#f9a8d4", borderColor: "transparent" },
   },
   custom: {
-    label: "自定义",
+    label: t("kind.custom"),
     color: { color: "rgba(74, 222, 128, 0.14)", textColor: "#86efac", borderColor: "transparent" },
   },
   supergroup: {
-    label: "超级群",
+    label: t("kind.supergroup"),
     color: { color: "rgba(96, 165, 250, 0.16)", textColor: "#93c5fd", borderColor: "transparent" },
   },
   group: {
-    label: "群组",
+    label: t("kind.group"),
     color: { color: "rgba(251, 191, 36, 0.16)", textColor: "#fcd34d", borderColor: "transparent" },
   },
-};
+}));
 
-const statusMeta: Record<string, { label: string; color: string }> = {
-  idle: { label: "可继续", color: "#93c5fd" },
-  running: { label: "下载中", color: "var(--td-pink)" },
-  caught_up: { label: "已追平", color: "#86efac" },
-  has_failed: { label: "有失败", color: "#f87171" },
-};
+const statusMeta = computed<Record<string, { label: string; color: string }>>(() => ({
+  idle: { label: t("status.idle"), color: "#93c5fd" },
+  running: { label: t("status.running"), color: "var(--td-pink)" },
+  caught_up: { label: t("status.caughtUp"), color: "#86efac" },
+  has_failed: { label: t("status.hasFailed"), color: "#f87171" },
+}));
 
 function isCustomRow(r: ChannelRow) {
   return Boolean(r.isCustom || r.custom || r.kind === "custom");
@@ -82,7 +83,7 @@ function openAddModal() {
 async function submitAdd() {
   const chat = addChat.value.trim();
   if (!chat) {
-    message.warning("请输入 @名称 或频道 ID");
+    message.warning(t("channels.needChat"));
     return;
   }
   adding.value = true;
@@ -91,12 +92,12 @@ async function submitAdd() {
       method: "POST",
       body: JSON.stringify({ chat }),
     });
-    message.success("已添加自定义频道");
+    message.success(t("channels.addSuccess"));
     addOpen.value = false;
     page.value = 1;
     await load();
   } catch (e) {
-    message.error(e instanceof Error ? e.message : "添加失败");
+    message.error(e instanceof Error ? e.message : t("common.addFailed"));
   } finally {
     adding.value = false;
   }
@@ -106,10 +107,10 @@ async function syncChannel(row: ChannelRow) {
   syncingId.value = row.chatId;
   try {
     await api(`/api/channels/${row.chatId}/sync`, { method: "POST", body: "{}" });
-    message.success("已同步最新消息");
+    message.success(t("channels.syncSuccess"));
     await load();
   } catch (e) {
-    message.error(e instanceof Error ? e.message : "同步失败");
+    message.error(e instanceof Error ? e.message : t("common.syncFailed"));
   } finally {
     syncingId.value = null;
   }
@@ -117,7 +118,7 @@ async function syncChannel(row: ChannelRow) {
 
 const columns = computed<DataTableColumns<ChannelRow>>(() => [
   {
-    title: "名称",
+    title: t("channels.name"),
     key: "title",
     ellipsis: { tooltip: true },
     render: (r) => {
@@ -134,20 +135,20 @@ const columns = computed<DataTableColumns<ChannelRow>>(() => [
     },
   },
   {
-    title: "类型",
+    title: t("channels.kind"),
     key: "kind",
     width: 90,
     render: (r) => {
       const kind = isCustomRow(r) ? "custom" : r.kind;
-      const meta = kindMeta[kind] || {
-        label: r.kind || "未知",
+      const meta = kindMeta.value[kind] || {
+        label: r.kind || t("kind.unknown"),
         color: { color: "rgba(255,255,255,0.08)", textColor: "rgba(255,255,255,0.55)", borderColor: "transparent" },
       };
       return h(NTag, { size: "small", bordered: false, color: meta.color }, { default: () => meta.label });
     },
   },
   {
-    title: "覆盖",
+    title: t("channels.coverage"),
     key: "coverage",
     width: 160,
     render: (r) => {
@@ -155,27 +156,30 @@ const columns = computed<DataTableColumns<ChannelRow>>(() => [
       const l = r.lastMessageId || 0;
       return h(ChannelCoverageBar, {
         percent: coveragePct(r),
-        text: l > 0 ? `#${c} / #${l}` : `水位 #${c}`,
+        text:
+          l > 0
+            ? t("channels.coverageProgress", { cursor: c, last: l })
+            : t("channels.coverageWatermark", { cursor: c }),
       });
     },
   },
   {
-    title: "已下载",
+    title: t("channels.downloaded"),
     key: "downloadedCount",
     width: 88,
     render: (r) => String(r.downloadedCount ?? 0),
   },
   {
-    title: "状态",
+    title: t("channels.statusCol"),
     key: "status",
     width: 90,
     render: (r) => {
-      const meta = statusMeta[r.status || "idle"] || statusMeta.idle;
+      const meta = statusMeta.value[r.status || "idle"] || statusMeta.value.idle;
       return h("span", { class: "status-text", style: { color: meta.color } }, meta.label);
     },
   },
   {
-    title: "操作",
+    title: t("channels.actions"),
     key: "actions",
     width: 112,
     align: "right",
@@ -187,7 +191,7 @@ const columns = computed<DataTableColumns<ChannelRow>>(() => [
             size: "small",
             class: "icon-square",
             loading: syncingId.value === r.chatId,
-            title: "同步",
+            title: t("channels.syncTitle"),
             onClick: (e: MouseEvent) => {
               e.stopPropagation();
               void syncChannel(r);
@@ -202,7 +206,7 @@ const columns = computed<DataTableColumns<ChannelRow>>(() => [
             class: "icon-square",
             type: "primary",
             ghost: true,
-            title: "下载",
+            title: t("channels.downloadTitle"),
             onClick: () => openDetail(r),
           },
           { icon: () => h(NIcon, { component: DownloadOutline }) },
@@ -220,7 +224,7 @@ async function load() {
     rows.value = data.items || [];
     total.value = data.total || 0;
   } catch (e) {
-    message.error(e instanceof Error ? e.message : "加载失败");
+    message.error(e instanceof Error ? e.message : t("common.loadFailed"));
   } finally {
     loading.value = false;
   }
@@ -233,52 +237,52 @@ onMounted(() => void load());
   <div class="page">
     <header class="head">
       <div>
-        <h2>频道</h2>
+        <h2>{{ t("channels.title") }}</h2>
       </div>
       <div class="head-actions">
         <n-button :loading="loading" @click="load">
           <template #icon>
             <n-icon :component="RefreshOutline" />
           </template>
-          刷新
+          {{ t("common.refresh") }}
         </n-button>
         <n-button type="primary" @click="openAddModal">
           <template #icon>
             <n-icon :component="AddOutline" />
           </template>
-          新增
+          {{ t("channels.add") }}
         </n-button>
       </div>
     </header>
     <n-spin :show="loading">
-      <n-empty v-if="!rows.length && !loading" description="暂无数据，去 Telegram 页同步或新增自定义频道" />
+      <n-empty v-if="!rows.length && !loading" :description="t('channels.empty')" />
       <n-data-table v-else :columns="columns" :data="rows" :bordered="false" size="small" />
       <div v-if="total > pageSize" class="pager">
-        <n-button size="small" :disabled="page <= 1" @click="page--; load()">上一页</n-button>
+        <n-button size="small" :disabled="page <= 1" @click="page--; load()">{{ t("common.prevPage") }}</n-button>
         <span>{{ page }} / {{ Math.ceil(total / pageSize) }}</span>
-        <n-button size="small" :disabled="page * pageSize >= total" @click="page++; load()">下一页</n-button>
+        <n-button size="small" :disabled="page * pageSize >= total" @click="page++; load()">{{ t("common.nextPage") }}</n-button>
       </div>
     </n-spin>
 
     <n-modal
       v-model:show="addOpen"
       preset="card"
-      title="新增频道"
+      :title="t('channels.addTitle')"
       style="width: min(420px, 92vw)"
       :mask-closable="!adding"
       :closable="!adding"
     >
-      <p class="add-hint">输入公开频道的 @名称 或频道 ID，解析后会出现在已加入频道之后。</p>
+      <p class="add-hint">{{ t("channels.addHint") }}</p>
       <n-input
         v-model:value="addChat"
-        placeholder="@channel 或 100…"
+        :placeholder="t('channels.addPlaceholder')"
         :disabled="adding"
         @keyup.enter="submitAdd"
       />
       <template #footer>
         <div class="modal-actions">
-          <n-button :disabled="adding" @click="addOpen = false">取消</n-button>
-          <n-button type="primary" :loading="adding" @click="submitAdd">添加</n-button>
+          <n-button :disabled="adding" @click="addOpen = false">{{ t("common.cancel") }}</n-button>
+          <n-button type="primary" :loading="adding" @click="submitAdd">{{ t("common.add") }}</n-button>
         </div>
       </template>
     </n-modal>

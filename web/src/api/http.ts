@@ -1,4 +1,5 @@
 import type { ApiOk } from "./types";
+import { i18n } from "../i18n";
 
 const TOKEN_KEY = "tdload_token";
 
@@ -51,7 +52,9 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   }
 
   if (!res.ok || body.ok === false) {
-    throw new Error(body.message || `请求失败（${res.status}）`);
+    throw new Error(
+      body.message || i18n.global.t("http.requestFailed", { status: res.status }),
+    );
   }
   return body.data as T;
 }

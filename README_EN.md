@@ -2,7 +2,7 @@
 
 [中文](README.md) | **English**
 
-Self-hosted Telegram batch download and watch console (single-user web app). Backend: Go + [iyear/tdl](https://github.com/iyear/tdl) / gotd. Frontend: Vue 3 + Naive UI (dark theme, pink accent).
+Self-hosted Telegram batch download and watch console (single-user web app). Backend: Go + [iyear/tdl](https://github.com/iyear/tdl) / gotd. Frontend: Vue 3 + Naive UI (dark theme, pink accent). UI supports **Chinese / English** (defaults to the browser language; can be switched and stored locally).
 
 **Image:** [wannayoung/tdload](https://hub.docker.com/r/wannayoung/tdload) (`linux/amd64` · `linux/arm64`)  
 **Source:** [github.com/WannaYoung/tdload](https://github.com/WannaYoung/tdload)
@@ -19,6 +19,7 @@ Sidebar: **Dashboard · Telegram · Saved Messages · Channels · Tasks · Watch
 - **Watch**: poll watched channels / groups / Saved / custom channels on an interval; incremental enqueue; content-type filter (all / media / photo / video)
 - **Library**: browse by channel / type; local image thumbnails; video covers from Telegram document thumbs (cached on download, backfilled when missing); disk scan updates index only and **does not** change channel or Saved cursors
 - **Settings**: filename template, threads per file, parallel files, album grouping, Takeout, proxy, no-image mode, watch interval, etc.
+- **UI language**: Chinese / English; first visit follows the browser (`zh*` → Chinese, otherwise English); switch from the header or login page; preference is stored in browser `localStorage`
 
 On-disk layout:
 
@@ -85,7 +86,7 @@ docker compose up -d
 | Admin | `ADMIN_USERNAME` / `ADMIN_PASSWORD` | **required** |
 | Proxy | `PROXY` | optional; overrides proxy in config |
 
-Tags: `wannayoung/tdload:latest`, `wannayoung/tdload:0.1.5`.
+Tags: `wannayoung/tdload:latest`, `wannayoung/tdload:0.1.6`.
 
 ## Local development
 

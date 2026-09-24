@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref } from "vue";
+import { useI18n } from "vue-i18n";
 import { NButton, NIcon } from "naive-ui";
 import { RefreshOutline, SyncOutline, TrashOutline } from "@vicons/ionicons5";
 import { useMobile } from "../../composables/useMobile";
@@ -31,6 +32,7 @@ type SavedPanelExpose = {
   completedCount: number;
 };
 
+const { t } = useI18n();
 const isMobile = useMobile();
 const savedPanel = ref<SavedPanelExpose | null>(null);
 
@@ -70,13 +72,13 @@ onUnmounted(() => {
 <template>
   <div class="page list-page" :class="{ pinned: !isMobile }">
     <div class="toolbar">
-      <h2>收藏同步</h2>
+      <h2>{{ t("saved.title") }}</h2>
       <div class="toolbar-actions">
         <n-button @click="reload(false)">
           <template #icon>
             <n-icon :component="RefreshOutline" />
           </template>
-          刷新
+          {{ t("common.refresh") }}
         </n-button>
         <n-button
           type="error"
@@ -88,19 +90,19 @@ onUnmounted(() => {
           <template #icon>
             <n-icon :component="TrashOutline" />
           </template>
-          清除
+          {{ t("saved.clear") }}
         </n-button>
         <n-button
           type="primary"
           :loading="!!savedPanel?.submitting"
           :disabled="!!savedPanel?.hasActiveSync"
-          :title="savedPanel?.hasActiveSync ? '已有进行中的同步' : undefined"
+          :title="savedPanel?.hasActiveSync ? t('saved.hasActiveSync') : undefined"
           @click="savedPanel?.createTask()"
         >
           <template #icon>
             <n-icon :component="SyncOutline" />
           </template>
-          {{ savedPanel?.hasActiveSync ? "同步中" : "同步" }}
+          {{ savedPanel?.hasActiveSync ? t("common.syncing") : t("common.sync") }}
         </n-button>
       </div>
     </div>

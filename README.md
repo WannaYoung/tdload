@@ -2,7 +2,7 @@
 
 **中文** | [English](README_EN.md)
 
-自托管 Telegram 批量下载与监听控制台（单用户 Web）。后端 Go + [iyear/tdl](https://github.com/iyear/tdl) / gotd，前端 Vue 3 + Naive UI（深色 + 粉主色）。
+自托管 Telegram 批量下载与监听控制台（单用户 Web）。后端 Go + [iyear/tdl](https://github.com/iyear/tdl) / gotd，前端 Vue 3 + Naive UI（深色 + 粉主色）。界面支持**中文 / 英文**（默认跟随浏览器语言，可切换并写入本地存储）。
 
 **镜像：** [wannayoung/tdload](https://hub.docker.com/r/wannayoung/tdload)（`linux/amd64` · `linux/arm64`）  
 **源码：** [github.com/WannaYoung/tdload](https://github.com/WannaYoung/tdload)
@@ -19,6 +19,7 @@
 - **监听**：按间隔轮询已监听频道 / 群 / 收藏 / 自定义频道，增量自动入队；可按内容类型（全部 / 媒体 / 图片 / 视频）筛选
 - **资源库**：按频道 / 类型浏览；图片本地缩放，视频封面用 Telegram document thumb（下载时写入缓存，浏览缺失时补拉）；扫盘只维护索引，**不改**频道或收藏水位
 - **设置**：文件名模板、单文件线程数、并行文件数、相册整组、Takeout、代理、无图模式、监听间隔等
+- **界面语言**：中文 / English；首次按浏览器语言（`zh*` → 中文，其它 → 英文），顶栏或登录页可切换，偏好保存在浏览器 `localStorage`
 
 落盘目录：
 
@@ -85,7 +86,7 @@ docker compose up -d
 | 管理员 | `ADMIN_USERNAME` / `ADMIN_PASSWORD` | **必填** |
 | 代理 | `PROXY` | 可选，覆盖配置文件中的代理 |
 
-标签示例：`wannayoung/tdload:latest`、`wannayoung/tdload:0.1.5`。
+标签示例：`wannayoung/tdload:latest`、`wannayoung/tdload:0.1.6`。
 
 ## 本地调试
 

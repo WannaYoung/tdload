@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { onMounted, reactive, ref } from "vue";
+import { useI18n } from "vue-i18n";
 import {
   NButton,
   NForm,
@@ -24,6 +25,7 @@ import { useMobile } from "../../composables/useMobile";
 import { applyNoImageSetting } from "../../composables/useNoImage";
 import SettingsSection from "./components/SettingsSection.vue";
 
+const { t } = useI18n();
 const isMobile = useMobile();
 const message = useMessage();
 const loading = ref(false);
@@ -71,7 +73,7 @@ async function load() {
     }
     applyNoImageSetting(form.noImage);
   } catch (e) {
-    message.error(e instanceof Error ? e.message : "加载失败");
+    message.error(e instanceof Error ? e.message : t("common.loadFailed"));
   } finally {
     loading.value = false;
   }
@@ -97,10 +99,10 @@ async function save() {
     });
     applyNoImageSetting(!!s.noImage);
     if (s.watchIntervalMinutes) form.watchIntervalMinutes = s.watchIntervalMinutes;
-    message.success("已保存");
+    message.success(t("settings.saved"));
     await load();
   } catch (e) {
-    message.error(e instanceof Error ? e.message : "保存失败");
+    message.error(e instanceof Error ? e.message : t("settings.saveFailed"));
   } finally {
     saving.value = false;
   }
@@ -116,44 +118,44 @@ onMounted(() => void load());
     :label-width="isMobile ? 'auto' : 140"
     :disabled="loading"
   >
-    <SettingsSection class="sec-ui" title="界面浏览" :icon="DesktopOutline">
-      <n-form-item label="无图模式">
+    <SettingsSection class="sec-ui" :title="t('settings.sectionUi')" :icon="DesktopOutline">
+      <n-form-item :label="t('settings.noImage')">
         <n-switch v-model:value="form.noImage" />
       </n-form-item>
     </SettingsSection>
 
-    <SettingsSection class="sec-download" title="下载任务" :icon="CloudDownloadOutline">
-      <n-form-item label="文件名模板">
+    <SettingsSection class="sec-download" :title="t('settings.sectionDownload')" :icon="CloudDownloadOutline">
+      <n-form-item :label="t('settings.template')">
         <n-input v-model:value="form.template" />
       </n-form-item>
       <p class="hint" :class="{ mobile: isMobile }">
-        文件路径：downloads / {频道ID}-{频道名称} / {模板名}.{扩展名}
+        {{ t("settings.pathHint") }}
       </p>
-      <n-form-item label="并发数">
+      <n-form-item :label="t('settings.concurrency')">
         <div class="pair-inputs" :class="{ mobile: isMobile }">
           <n-input-number v-model:value="form.concurrency" :min="1" :max="16" class="num" />
-          <span class="pair-side-label">线程数</span>
+          <span class="pair-side-label">{{ t("settings.threads") }}</span>
           <n-input-number v-model:value="form.threads" :min="1" :max="32" class="num" />
         </div>
       </n-form-item>
-      <n-form-item label="跳过已下载">
+      <n-form-item :label="t('settings.skipSame')">
         <div class="switch-pair">
           <n-switch v-model:value="form.skipSame" />
-          <span class="pair-side-label">相册整组</span>
+          <span class="pair-side-label">{{ t("settings.groupAlbum") }}</span>
           <n-switch v-model:value="form.groupAlbum" />
         </div>
       </n-form-item>
-      <n-form-item label="纠正扩展名">
+      <n-form-item :label="t('settings.rewriteExt')">
         <div class="switch-pair">
           <n-switch v-model:value="form.rewriteExt" />
-          <span class="pair-side-label">Takeout</span>
+          <span class="pair-side-label">{{ t("settings.takeout") }}</span>
           <n-switch v-model:value="form.takeout" />
         </div>
       </n-form-item>
     </SettingsSection>
 
-    <SettingsSection class="sec-watch" title="监听" :icon="EyeOutline">
-      <n-form-item label="执行间隔（分钟）">
+    <SettingsSection class="sec-watch" :title="t('settings.sectionWatch')" :icon="EyeOutline">
+      <n-form-item :label="t('settings.watchInterval')">
         <n-input-number
           v-model:value="form.watchIntervalMinutes"
           :min="10"
@@ -163,25 +165,25 @@ onMounted(() => void load());
         />
       </n-form-item>
       <p class="hint" :class="{ mobile: isMobile }">
-        默认 30 分钟，范围 10–300。仅下载加入监听后新增区间内的消息（含端点），下载前按索引去重。
+        {{ t("settings.watchHint") }}
       </p>
     </SettingsSection>
 
-    <SettingsSection class="sec-proxy" title="网络" :icon="GlobeOutline">
-      <n-form-item label="代理">
-        <n-input v-model:value="form.proxy" placeholder="socks5://127.0.0.1:1080 或 http://…" />
+    <SettingsSection class="sec-proxy" :title="t('settings.sectionNetwork')" :icon="GlobeOutline">
+      <n-form-item :label="t('settings.proxy')">
+        <n-input v-model:value="form.proxy" :placeholder="t('settings.proxyPlaceholder')" />
       </n-form-item>
     </SettingsSection>
 
-    <SettingsSection class="sec-info" title="系统信息" :icon="InformationCircleOutline">
-      <n-form-item label="版本">
-        <span>{{ about.version || "—" }}</span>
+    <SettingsSection class="sec-info" :title="t('settings.sectionAbout')" :icon="InformationCircleOutline">
+      <n-form-item :label="t('settings.version')">
+        <span>{{ about.version || t("common.dash") }}</span>
       </n-form-item>
-      <n-form-item label="源码">
+      <n-form-item :label="t('settings.source')">
         <a v-if="about.sourceUrl" class="source-link" :href="about.sourceUrl" target="_blank" rel="noopener">
           {{ about.sourceUrl }}
         </a>
-        <span v-else>—</span>
+        <span v-else>{{ t("common.dash") }}</span>
       </n-form-item>
     </SettingsSection>
 
@@ -190,7 +192,7 @@ onMounted(() => void load());
         <template #icon>
           <n-icon :component="SaveOutline" />
         </template>
-        保存
+        {{ t("common.save") }}
       </n-button>
     </div>
   </n-form>

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { useI18n } from "vue-i18n";
 import { NIcon, NProgress, NTag } from "naive-ui";
 import {
   FolderOpenOutline,
@@ -19,12 +20,14 @@ defineProps<{
 const emit = defineEmits<{
   navigate: [name: string];
 }>();
+
+const { t } = useI18n();
 </script>
 
 <template>
   <section class="panel">
     <header class="panel-head">
-      <h2>资源概况</h2>
+      <h2>{{ t("resource.title") }}</h2>
     </header>
     <div class="resource-list">
       <button class="resource" type="button" @click="emit('navigate', 'telegram')">
@@ -33,14 +36,14 @@ const emit = defineEmits<{
         </div>
         <div class="resource-body">
           <div class="resource-top">
-            <span>Telegram</span>
-            <strong>{{ stats.tgActive ? "已登录" : "未登录" }}</strong>
+            <span>{{ t("layout.telegram") }}</span>
+            <strong>{{ stats.tgActive ? t("common.loggedIn") : t("common.notLoggedIn") }}</strong>
           </div>
           <div class="resource-hint">
             <n-tag size="tiny" :type="stats.tgConfigured ? 'success' : 'warning'">
-              API {{ stats.tgConfigured ? "已配置" : "未配置" }}
+              API {{ stats.tgConfigured ? t("resource.apiConfigured") : t("resource.apiNotConfigured") }}
             </n-tag>
-            <n-tag v-if="stats.proxyConfigured" size="tiny" type="info">代理开</n-tag>
+            <n-tag v-if="stats.proxyConfigured" size="tiny" type="info">{{ t("resource.proxyOn") }}</n-tag>
           </div>
         </div>
       </button>
@@ -51,7 +54,7 @@ const emit = defineEmits<{
         </div>
         <div class="resource-body">
           <div class="resource-top">
-            <span>频道 / 群</span>
+            <span>{{ t("resource.channelsGroups") }}</span>
             <strong>{{ stats.dialogCount ?? 0 }}</strong>
           </div>
           <div class="resource-hint">{{ dialogsSyncedText }}</div>
@@ -64,10 +67,10 @@ const emit = defineEmits<{
         </div>
         <div class="resource-body">
           <div class="resource-top">
-            <span>收藏</span>
+            <span>{{ t("resource.saved") }}</span>
             <strong>{{ stats.savedDownloaded ?? 0 }}/{{ stats.savedCount ?? 0 }}</strong>
           </div>
-          <div class="resource-hint">已下载 / 缓存条目</div>
+          <div class="resource-hint">{{ t("resource.savedHint") }}</div>
         </div>
       </button>
 
@@ -77,10 +80,10 @@ const emit = defineEmits<{
         </div>
         <div class="resource-body">
           <div class="resource-top">
-            <span>资源库</span>
+            <span>{{ t("resource.library") }}</span>
             <strong>{{ stats.media }}</strong>
           </div>
-          <div class="resource-hint">已索引媒体文件</div>
+          <div class="resource-hint">{{ t("resource.libraryHint") }}</div>
         </div>
       </button>
 
@@ -90,8 +93,8 @@ const emit = defineEmits<{
         </div>
         <div class="resource-body">
           <div class="resource-top">
-            <span>磁盘</span>
-            <strong>{{ stats.diskTotal ? `${diskPercent}%` : "—" }}</strong>
+            <span>{{ t("resource.disk") }}</span>
+            <strong>{{ stats.diskTotal ? `${diskPercent}%` : t("common.dash") }}</strong>
           </div>
           <n-progress
             v-if="stats.diskTotal"

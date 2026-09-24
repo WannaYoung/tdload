@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, h, ref, watch } from "vue";
+import { useI18n } from "vue-i18n";
 import {
   NButton,
   NDataTable,
@@ -25,6 +26,7 @@ const props = defineProps<{
   active: boolean;
 }>();
 
+const { t } = useI18n();
 const message = useMessage();
 const loading = ref(false);
 const submitting = ref(false);
@@ -36,17 +38,17 @@ const doneCount = ref(0);
 const page = ref(1);
 const pageSize = 50;
 
-const statusLabel: Record<string, string> = {
-  pending: "等待",
-  downloading: "下载中",
-  running: "下载中",
-  queued: "排队",
-  done: "完成",
-  skipped: "跳过",
-  failed: "失败",
-  paused: "暂停",
-  cancelled: "取消",
-};
+const statusLabel = computed<Record<string, string>>(() => ({
+  pending: t("status.pending"),
+  downloading: t("status.downloading"),
+  running: t("status.running"),
+  queued: t("status.queued"),
+  done: t("status.done"),
+  skipped: t("status.skipped"),
+  failed: t("status.failed"),
+  paused: t("status.paused"),
+  cancelled: t("status.cancelled"),
+}));
 
 const statusTagColor: Record<string, { color: string; textColor: string; borderColor: string }> = {
   downloading: { color: "rgba(244, 114, 182, 0.16)", textColor: "#f9a8d4", borderColor: "transparent" },
@@ -72,28 +74,49 @@ function renderStatus(status: string) {
     textColor: "rgba(255,255,255,0.55)",
     borderColor: "transparent",
   };
-  return h(NTag, { size: "small", bordered: false, color }, { default: () => statusLabel[status] || status });
+  return h(
+    NTag,
+    { size: "small", bordered: false, color },
+    { default: () => statusLabel.value[status] || status },
+  );
+}
+
+/** Normalize backend Chinese labels or English codes to a stable key. */
+function resolveMediaKindKey(kind?: string): "image" | "video" | "audio" | "file" | null {
+  if (!kind || kind === "—" || kind === "-") return null;
+  const lower = kind.toLowerCase();
+  if (lower === "image" || kind === "图片") return "image";
+  if (lower === "video" || kind === "视频") return "video";
+  if (lower === "audio" || kind === "音频") return "audio";
+  if (lower === "file" || kind === "文件") return "file";
+  return "file";
 }
 
 function mediaIcon(kind?: string) {
-  switch (kind) {
-    case "图片":
+  switch (resolveMediaKindKey(kind)) {
+    case "image":
       return ImageOutline;
-    case "视频":
+    case "video":
       return VideocamOutline;
-    case "音频":
+    case "audio":
       return MusicalNotesOutline;
     default:
       return DocumentOutline;
   }
 }
 
+function mediaKindDisplay(kind?: string) {
+  const key = resolveMediaKindKey(kind);
+  if (key == null) return t("common.dash");
+  return t(`mediaKind.${key}`);
+}
+
 function renderMediaKind(kind?: string) {
-  const label = kind || "文件";
+  const label = mediaKindDisplay(kind);
   return h(
     NTag,
     { size: "small", bordered: false, color: pinkTag, title: label },
-    { default: () => h(NIcon, { size: 16, component: mediaIcon(label) }) },
+    { default: () => h(NIcon, { size: 16, component: mediaIcon(kind) }) },
   );
 }
 
@@ -107,7 +130,7 @@ async function load(silent = false) {
     total.value = data.total || 0;
     doneCount.value = data.doneCount || 0;
   } catch (e) {
-    if (!silent) message.error(e instanceof Error ? e.message : "加载失败");
+    if (!silent) message.error(e instanceof Error ? e.message : t("common.loadFailed"));
   } finally {
     if (!silent) loading.value = false;
   }
@@ -141,10 +164,10 @@ function applyItemProgress(ev: {
 async function deleteItem(id: number) {
   try {
     await api(`/api/tasks/items/${id}`, { method: "DELETE" });
-    message.success("已删除");
+    message.success(t("messageDownload.deleted"));
     await load();
   } catch (e) {
-    message.error(e instanceof Error ? e.message : "删除失败");
+    message.error(e instanceof Error ? e.message : t("common.deleteFailed"));
   }
 }
 
@@ -152,11 +175,15 @@ async function clearCompleted() {
   clearing.value = true;
   try {
     const res = await api<{ cleared: number }>("/api/tasks/items/completed?kind=message", { method: "DELETE" });
-    message.success(res.cleared ? `已清除 ${res.cleared} 条` : "没有可清除的已完成项");
+    message.success(
+      res.cleared
+        ? t("messageDownload.cleared", { n: res.cleared })
+        : t("messageDownload.nothingToClear"),
+    );
     page.value = 1;
     await load();
   } catch (e) {
-    message.error(e instanceof Error ? e.message : "清除失败");
+    message.error(e instanceof Error ? e.message : t("common.clearFailed"));
   } finally {
     clearing.value = false;
   }
@@ -167,10 +194,10 @@ async function createTask() {
   try {
     await api("/api/tasks", { method: "POST", body: JSON.stringify({ text: text.value, source: "url" }) });
     text.value = "";
-    message.success("已入队");
+    message.success(t("messageDownload.enqueued"));
     await load();
   } catch (e) {
-    message.error(e instanceof Error ? e.message : "创建失败");
+    message.error(e instanceof Error ? e.message : t("common.createFailed"));
   } finally {
     submitting.value = false;
   }
@@ -178,33 +205,33 @@ async function createTask() {
 
 const columns = computed<DataTableColumns<TaskItemRow>>(() => [
   {
-    title: "频道",
+    title: t("messageDownload.channel"),
     key: "chatTitle",
     ellipsis: { tooltip: true },
-    render: (r) => r.chatTitle || String(r.chatId || "—"),
+    render: (r) => r.chatTitle || String(r.chatId || t("common.dash")),
   },
-  { title: "消息 ID", key: "messageId", width: 100 },
+  { title: t("messageDownload.messageId"), key: "messageId", width: 100 },
   {
-    title: "名称",
+    title: t("messageDownload.name"),
     key: "fileName",
     ellipsis: { tooltip: true },
-    render: (r) => r.fileName || "—",
+    render: (r) => r.fileName || t("common.dash"),
   },
   {
-    title: "类型",
+    title: t("messageDownload.type"),
     key: "mediaKind",
     width: 64,
     align: "center",
     render: (r) => renderMediaKind(r.mediaKind),
   },
   {
-    title: "状态",
+    title: t("messageDownload.statusCol"),
     key: "status",
     width: 96,
     render: (r) => renderStatus(r.status),
   },
   {
-    title: "操作",
+    title: t("messageDownload.actions"),
     key: "actions",
     width: 72,
     align: "right",
@@ -215,7 +242,7 @@ const columns = computed<DataTableColumns<TaskItemRow>>(() => [
           size: "tiny",
           secondary: true,
           type: "error",
-          title: "删除",
+          title: t("common.delete"),
           onClick: () => void deleteItem(r.id),
         },
         { icon: () => h(NIcon, { component: TrashOutline }) },
@@ -245,18 +272,18 @@ defineExpose({
         v-model:value="text"
         type="textarea"
         :autosize="{ minRows: 1, maxRows: 8 }"
-        placeholder="每行一条 t.me 链接"
+        :placeholder="t('messageDownload.placeholder')"
         class="composer-input"
       />
       <n-button type="primary" :loading="submitting" :disabled="!text.trim()" @click="createTask">
         <template #icon>
           <n-icon :component="DownloadOutline" />
         </template>
-        下载
+        {{ t("messageDownload.download") }}
       </n-button>
     </div>
     <div class="list-meta">
-      <span>共 {{ total }} 条消息，{{ doneCount }} 条已下载</span>
+      <span>{{ t("messageDownload.listMeta", { total, done: doneCount }) }}</span>
       <n-button
         size="small"
         type="error"
@@ -265,7 +292,7 @@ defineExpose({
         :disabled="doneCount <= 0"
         @click="clearCompleted"
       >
-        清除完成
+        {{ t("messageDownload.clearCompleted") }}
       </n-button>
     </div>
     <div class="table-wrap message-table">
@@ -278,14 +305,14 @@ defineExpose({
         :row-key="(r: TaskItemRow) => r.id"
       >
         <template #empty>
-          <n-empty description="暂无消息项" />
+          <n-empty :description="t('messageDownload.empty')" />
         </template>
       </n-data-table>
     </div>
     <div v-if="total > pageSize" class="pager">
-      <n-button size="small" :disabled="page <= 1" @click="page--; load()">上一页</n-button>
+      <n-button size="small" :disabled="page <= 1" @click="page--; load()">{{ t("common.prevPage") }}</n-button>
       <span>{{ page }} / {{ Math.ceil(total / pageSize) }}</span>
-      <n-button size="small" :disabled="page * pageSize >= total" @click="page++; load()">下一页</n-button>
+      <n-button size="small" :disabled="page * pageSize >= total" @click="page++; load()">{{ t("common.nextPage") }}</n-button>
     </div>
   </div>
 </template>

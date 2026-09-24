@@ -1,7 +1,7 @@
 {
   "name": "tdload-web",
   "private": true,
-  "version": "0.1.5",
+  "version": "0.1.6",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -13,6 +13,7 @@
     "naive-ui": "^2.43.2",
     "pinia": "^3.0.4",
     "vue": "^3.5.22",
+    "vue-i18n": "^11.4.12",
     "vue-router": "^4.6.3"
   },
   "devDependencies": {
@@ -22,6 +23,8 @@
     "vue-tsc": "^3.0.8"
   },
   "pnpm": {
-    "onlyBuiltDependencies": ["esbuild"]
+    "onlyBuiltDependencies": [
+      "esbuild"
+    ]
   }
 }

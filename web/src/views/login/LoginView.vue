@@ -1,9 +1,12 @@
 <script setup lang="ts">
 import { reactive, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
+import { useI18n } from "vue-i18n";
 import { NButton, NCard, NForm, NFormItem, NInput, useMessage } from "naive-ui";
 import { useAuthStore } from "../../stores/auth";
+import LanguageSwitcher from "../../components/LanguageSwitcher.vue";
 
+const { t } = useI18n();
 const auth = useAuthStore();
 const router = useRouter();
 const route = useRoute();
@@ -21,7 +24,7 @@ async function submit() {
     const redirect = typeof route.query.redirect === "string" ? route.query.redirect : "/";
     await router.replace(redirect);
   } catch (err) {
-    message.error(err instanceof Error ? err.message : "登录失败");
+    message.error(err instanceof Error ? err.message : t("login.failed"));
   } finally {
     loading.value = false;
   }
@@ -30,35 +33,38 @@ async function submit() {
 
 <template>
   <div class="wrap">
+    <div class="lang-switch">
+      <LanguageSwitcher />
+    </div>
     <div class="glow glow-a" />
     <div class="glow glow-b" />
     <n-card class="card" :bordered="false">
       <header class="brand">
         <h1>TDLoad</h1>
-        <p>Telegram 批量下载控制台</p>
+        <p>{{ t("login.subtitle") }}</p>
       </header>
       <n-form :model="form" @submit.prevent="submit">
-        <n-form-item label="用户名">
+        <n-form-item :label="t('login.username')">
           <n-input
             v-model:value="form.username"
-            placeholder="用户名"
+            :placeholder="t('login.username')"
             size="large"
             :disabled="loading"
           />
         </n-form-item>
-        <n-form-item label="密码">
+        <n-form-item :label="t('login.password')">
           <n-input
             v-model:value="form.password"
             type="password"
             size="large"
             show-password-on="click"
-            placeholder="密码"
+            :placeholder="t('login.password')"
             :disabled="loading"
             @keyup.enter="submit"
           />
         </n-form-item>
         <n-button type="primary" block size="large" :loading="loading" @click="submit">
-          登录
+          {{ t("login.submit") }}
         </n-button>
       </n-form>
     </n-card>
@@ -77,6 +83,12 @@ async function submit() {
   background:
     radial-gradient(1200px 600px at 50% -10%, rgba(244, 114, 182, 0.18), transparent 55%),
     #101014;
+}
+.lang-switch {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 2;
 }
 .glow {
   position: absolute;

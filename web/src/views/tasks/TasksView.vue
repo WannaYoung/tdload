@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref } from "vue";
+import { useI18n } from "vue-i18n";
 import { NButton, NIcon } from "naive-ui";
 import { RefreshOutline } from "@vicons/ionicons5";
 import { useMobile } from "../../composables/useMobile";
@@ -22,6 +23,7 @@ type ProgressEv = {
   itemCounts?: ItemCounts;
 };
 
+const { t } = useI18n();
 const isMobile = useMobile();
 
 const messagePanel = ref<{
@@ -86,13 +88,13 @@ onUnmounted(() => {
 <template>
   <div class="page list-page" :class="{ pinned: !isMobile }">
     <div class="toolbar">
-      <h2>任务</h2>
+      <h2>{{ t("tasks.title") }}</h2>
       <div class="toolbar-actions">
         <n-button @click="reload(false)">
           <template #icon>
             <n-icon :component="RefreshOutline" />
           </template>
-          刷新
+          {{ t("common.refresh") }}
         </n-button>
       </div>
     </div>

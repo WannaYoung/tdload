@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { h, onMounted, onUnmounted, ref } from "vue";
+import { computed, h, onMounted, onUnmounted, ref } from "vue";
+import { useI18n } from "vue-i18n";
 import {
   NButton,
   NDataTable,
@@ -20,6 +21,7 @@ defineOptions({ name: "WatchView" });
 
 type ContentType = "all" | "media" | "image" | "video";
 
+const { t } = useI18n();
 const message = useMessage();
 const isMobile = useMobile();
 const loading = ref(false);
@@ -30,38 +32,37 @@ const selectedChatId = ref<number | null>(null);
 const selectedContentType = ref<ContentType>("all");
 const intervalMinutes = ref(30);
 
-const contentTypeOptions: SelectOption[] = [
-  { label: "全部", value: "all" },
-  { label: "媒体", value: "media" },
-  { label: "图片", value: "image" },
-  { label: "视频", value: "video" },
-];
+const contentTypeOptions = computed<SelectOption[]>(() => [
+  { label: t("contentType.all"), value: "all" },
+  { label: t("contentType.media"), value: "media" },
+  { label: t("contentType.image"), value: "image" },
+  { label: t("contentType.video"), value: "video" },
+]);
 
-const kindMeta: Record<
-  string,
-  { label: string; color: { color: string; textColor: string; borderColor: string } }
-> = {
+const kindMeta = computed<
+  Record<string, { label: string; color: { color: string; textColor: string; borderColor: string } }>
+>(() => ({
   saved: {
-    label: "收藏",
+    label: t("kind.saved"),
     color: { color: "rgba(244, 114, 182, 0.16)", textColor: "#f9a8d4", borderColor: "transparent" },
   },
   custom: {
-    label: "自定义",
+    label: t("kind.custom"),
     color: { color: "rgba(74, 222, 128, 0.14)", textColor: "#86efac", borderColor: "transparent" },
   },
   channel: {
-    label: "频道",
+    label: t("kind.channel"),
     color: { color: "rgba(244, 114, 182, 0.16)", textColor: "#f9a8d4", borderColor: "transparent" },
   },
   supergroup: {
-    label: "超级群",
+    label: t("kind.supergroup"),
     color: { color: "rgba(96, 165, 250, 0.16)", textColor: "#93c5fd", borderColor: "transparent" },
   },
   group: {
-    label: "群组",
+    label: t("kind.group"),
     color: { color: "rgba(251, 191, 36, 0.16)", textColor: "#fcd34d", borderColor: "transparent" },
   },
-};
+}));
 
 function kindOfCandidate(c: WatchCandidate) {
   if (c.kind === "saved") return "saved";
@@ -76,17 +77,16 @@ function kindOfRow(r: WatchRow) {
 }
 
 function renderKindTag(kind: string) {
-  const meta = kindMeta[kind];
+  const meta = kindMeta.value[kind];
   if (!meta) return null;
   return h(NTag, { size: "small", bordered: false, color: meta.color }, { default: () => meta.label });
 }
 
-const contentTypeMeta: Record<
-  string,
-  { label: string; color: { color: string; textColor: string; borderColor: string } }
-> = {
+const contentTypeMeta = computed<
+  Record<string, { label: string; color: { color: string; textColor: string; borderColor: string } }>
+>(() => ({
   all: {
-    label: "全部",
+    label: t("contentType.all"),
     color: {
       color: "rgba(255, 255, 255, 0.1)",
       textColor: "rgba(255, 255, 255, 0.72)",
@@ -94,7 +94,7 @@ const contentTypeMeta: Record<
     },
   },
   media: {
-    label: "媒体",
+    label: t("contentType.media"),
     color: {
       color: "rgba(244, 114, 182, 0.16)",
       textColor: "#f9a8d4",
@@ -102,7 +102,7 @@ const contentTypeMeta: Record<
     },
   },
   image: {
-    label: "图片",
+    label: t("contentType.image"),
     color: {
       color: "rgba(251, 191, 36, 0.16)",
       textColor: "#fbbf24",
@@ -110,24 +110,24 @@ const contentTypeMeta: Record<
     },
   },
   video: {
-    label: "视频",
+    label: t("contentType.video"),
     color: {
       color: "rgba(96, 165, 250, 0.16)",
       textColor: "#93c5fd",
       borderColor: "transparent",
     },
   },
-};
+}));
 
 function renderContentType(ct?: string) {
-  const meta = contentTypeMeta[ct || "all"] || contentTypeMeta.all;
+  const meta = contentTypeMeta.value[ct || "all"] || contentTypeMeta.value.all;
   return h(NTag, { size: "small", bordered: false, color: meta.color }, { default: () => meta.label });
 }
 
 let timer: number | null = null;
 
 function formatTime(v?: string) {
-  if (!v) return "—";
+  if (!v) return t("common.dash");
   const d = new Date(v);
   if (Number.isNaN(d.getTime())) return v;
   const pad = (n: number) => String(n).padStart(2, "0");
@@ -148,9 +148,9 @@ function renderSelectLabel(option: { label?: string; value?: string | number; ki
   ]);
 }
 
-const columns: DataTableColumns<WatchRow> = [
+const columns = computed<DataTableColumns<WatchRow>>(() => [
   {
-    title: "频道",
+    title: t("watch.channel"),
     key: "chatTitle",
     ellipsis: { tooltip: true },
     render: (r) =>
@@ -162,37 +162,37 @@ const columns: DataTableColumns<WatchRow> = [
       ]),
   },
   {
-    title: "内容类型",
+    title: t("watch.contentType"),
     key: "contentType",
     width: 96,
     render: (r) => renderContentType(r.contentType),
   },
   {
-    title: "已下载",
+    title: t("watch.downloaded"),
     key: "downloadedCount",
     width: 90,
     render: (r) => String(r.downloadedCount ?? 0),
   },
   {
-    title: "最新消息",
+    title: t("watch.lastMessage"),
     key: "lastMessageId",
     width: 110,
-    render: (r) => (r.lastMessageId > 0 ? String(r.lastMessageId) : "—"),
+    render: (r) => (r.lastMessageId > 0 ? String(r.lastMessageId) : t("common.dash")),
   },
   {
-    title: "上次运行",
+    title: t("watch.lastRun"),
     key: "lastRunAt",
     width: 160,
     render: (r) => formatTime(r.lastRunAt),
   },
   {
-    title: "下次运行",
+    title: t("watch.nextRun"),
     key: "nextRunAt",
     width: 160,
     render: (r) => formatTime(r.nextRunAt),
   },
   {
-    title: "操作",
+    title: t("watch.actions"),
     key: "actions",
     width: 72,
     align: "right",
@@ -203,13 +203,13 @@ const columns: DataTableColumns<WatchRow> = [
           size: "tiny",
           secondary: true,
           type: "error",
-          title: "删除",
+          title: t("common.delete"),
           onClick: () => void remove(r),
         },
         { icon: () => h(NIcon, { component: TrashOutline }) },
       ),
   },
-];
+]);
 
 async function loadCandidates() {
   try {
@@ -234,7 +234,7 @@ async function load(silent = false) {
     if (data.watchIntervalMinutes) intervalMinutes.value = data.watchIntervalMinutes;
     await loadCandidates();
   } catch (e) {
-    if (!silent) message.error(e instanceof Error ? e.message : "加载失败");
+    if (!silent) message.error(e instanceof Error ? e.message : t("common.loadFailed"));
   } finally {
     if (!silent) loading.value = false;
   }
@@ -242,7 +242,7 @@ async function load(silent = false) {
 
 async function addWatch() {
   if (selectedChatId.value == null) {
-    message.warning("请先选择频道");
+    message.warning(t("watch.selectChannel"));
     return;
   }
   adding.value = true;
@@ -254,12 +254,12 @@ async function addWatch() {
         contentType: selectedContentType.value,
       }),
     });
-    message.success("已加入监听");
+    message.success(t("watch.addSuccess"));
     selectedChatId.value = null;
     selectedContentType.value = "all";
     await load();
   } catch (e) {
-    message.error(e instanceof Error ? e.message : "添加失败");
+    message.error(e instanceof Error ? e.message : t("common.addFailed"));
   } finally {
     adding.value = false;
   }
@@ -268,10 +268,10 @@ async function addWatch() {
 async function remove(row: WatchRow) {
   try {
     await api(`/api/watch/${row.id}`, { method: "DELETE" });
-    message.success("已移除监听");
+    message.success(t("watch.removeSuccess"));
     await load();
   } catch (e) {
-    message.error(e instanceof Error ? e.message : "删除失败");
+    message.error(e instanceof Error ? e.message : t("common.deleteFailed"));
   }
 }
 
@@ -289,15 +289,15 @@ onUnmounted(() => {
   <div class="page list-page" :class="{ pinned: !isMobile }">
     <div class="toolbar">
       <div class="toolbar-left">
-        <h2>监听</h2>
-        <span class="interval">间隔 {{ intervalMinutes }} 分钟</span>
+        <h2>{{ t("watch.title") }}</h2>
+        <span class="interval">{{ t("watch.interval", { n: intervalMinutes }) }}</span>
       </div>
       <div class="toolbar-actions">
         <n-button :loading="loading" @click="load(false)">
           <template #icon>
             <n-icon :component="RefreshOutline" />
           </template>
-          刷新
+          {{ t("common.refresh") }}
         </n-button>
       </div>
     </div>
@@ -309,7 +309,7 @@ onUnmounted(() => {
           class="composer-input"
           filterable
           clearable
-          placeholder="选择要监听的频道"
+          :placeholder="t('watch.selectPlaceholder')"
           :options="selectOptions()"
           :render-label="renderSelectLabel"
           :disabled="loading || !candidates.length"
@@ -324,7 +324,7 @@ onUnmounted(() => {
           <template #icon>
             <n-icon :component="AddOutline" />
           </template>
-          添加
+          {{ t("common.add") }}
         </n-button>
       </div>
 
@@ -338,7 +338,7 @@ onUnmounted(() => {
           :row-key="(r: WatchRow) => r.id"
         >
           <template #empty>
-            <n-empty description="暂无监听。可先添加「我的收藏」或已同步的频道。" />
+            <n-empty :description="t('watch.empty')" />
           </template>
         </n-data-table>
       </div>

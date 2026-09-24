@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
+import { useI18n } from "vue-i18n";
 import { useRoute, useRouter } from "vue-router";
 import {
   NButton,
@@ -34,6 +35,7 @@ import { useAppEvents } from "../../composables/useAppEvents";
 
 defineOptions({ name: "ChannelDetailView" });
 
+const { t } = useI18n();
 const route = useRoute();
 const router = useRouter();
 const message = useMessage();
@@ -47,12 +49,12 @@ const cursorSaving = ref(false);
 const batchSize = ref(100);
 type ContentType = "all" | "media" | "image" | "video";
 const contentType = ref<ContentType>("all");
-const contentTypeOptions: SelectOption[] = [
-  { label: "全部", value: "all" },
-  { label: "媒体", value: "media" },
-  { label: "图片", value: "image" },
-  { label: "视频", value: "video" },
-];
+const contentTypeOptions = computed<SelectOption[]>(() => [
+  { label: t("contentType.all"), value: "all" },
+  { label: t("contentType.media"), value: "media" },
+  { label: t("contentType.image"), value: "image" },
+  { label: t("contentType.video"), value: "video" },
+]);
 const info = ref<ChannelDownloadInfo | null>(null);
 const cursorModalOpen = ref(false);
 const cursorInput = ref<number | null>(null);
@@ -64,14 +66,14 @@ const chatId = computed(() => {
   return Number.isFinite(n) ? n : 0;
 });
 
-const statusLabel: Record<string, string> = {
-  idle: "可继续",
-  running: "下载中",
-  queued: "排队中",
-  paused: "已暂停",
-  caught_up: "已追平",
-  has_failed: "有失败",
-};
+const statusLabel = computed<Record<string, string>>(() => ({
+  idle: t("status.idle"),
+  running: t("status.running"),
+  queued: t("status.queuedLong"),
+  paused: t("status.pausedLong"),
+  caught_up: t("status.caughtUp"),
+  has_failed: t("status.hasFailed"),
+}));
 
 /** 与频道列表状态色一致，标签底色用同色半透明 */
 const statusTagColor: Record<string, { color: string; textColor: string; borderColor: string }> = {
@@ -83,15 +85,15 @@ const statusTagColor: Record<string, { color: string; textColor: string; borderC
   has_failed: { color: "rgba(248, 113, 113, 0.16)", textColor: "#f87171", borderColor: "transparent" },
 };
 
-const taskStatusLabel: Record<string, string> = {
-  running: "下载中",
-  listing: "处理中",
-  queued: "排队",
-  paused: "暂停",
-  done: "完成",
-  failed: "失败",
-  cancelled: "取消",
-};
+const taskStatusLabel = computed<Record<string, string>>(() => ({
+  running: t("status.running"),
+  listing: t("status.listing"),
+  queued: t("status.queued"),
+  paused: t("status.paused"),
+  done: t("status.done"),
+  failed: t("status.failed"),
+  cancelled: t("status.cancelled"),
+}));
 
 const taskStatusTagColor: Record<string, { color: string; textColor: string; borderColor: string }> = {
   listing: { color: "rgba(96, 165, 250, 0.16)", textColor: "#93c5fd", borderColor: "transparent" },
@@ -116,44 +118,44 @@ function countOr0(n?: number | null) {
   return typeof n === "number" && Number.isFinite(n) ? n : 0;
 }
 
-function isListingPhase(t?: {
+function isListingPhase(task?: {
   phase?: string;
   status?: string;
   progressDone?: number;
   doneFiles?: number;
   itemCounts?: ItemCounts | null;
 } | null) {
-  if (!t) return false;
-  if (t.phase === "listing") return true;
-  if (t.phase === "downloading") return false;
+  if (!task) return false;
+  if (task.phase === "listing") return true;
+  if (task.phase === "downloading") return false;
   return (
-    (t.status === "queued" || t.status === "running") &&
-    countOr0(t.progressDone) === 0 &&
-    countOr0(t.doneFiles) === 0 &&
+    (task.status === "queued" || task.status === "running") &&
+    countOr0(task.progressDone) === 0 &&
+    countOr0(task.doneFiles) === 0 &&
     !(
-      t.itemCounts &&
-      (countOr0(t.itemCounts.done) ||
-        countOr0(t.itemCounts.skipped) ||
-        countOr0(t.itemCounts.failed) ||
-        countOr0(t.itemCounts.downloading))
+      task.itemCounts &&
+      (countOr0(task.itemCounts.done) ||
+        countOr0(task.itemCounts.skipped) ||
+        countOr0(task.itemCounts.failed) ||
+        countOr0(task.itemCounts.downloading))
     )
   );
 }
 
-function taskDisplayStatus(t: { phase?: string; status?: string }) {
-  const st = t.status || "";
+function taskDisplayStatus(task: { phase?: string; status?: string }) {
+  const st = task.status || "";
   if (st === "done" || st === "failed" || st === "cancelled" || st === "paused") {
     return st;
   }
-  if (isListingPhase(t)) return "listing";
-  if (st === "running" || t.phase === "downloading") return "running";
+  if (isListingPhase(task)) return "listing";
+  if (st === "running" || task.phase === "downloading") return "running";
   return st || "queued";
 }
 
-function taskStatusTag(t: { phase?: string; status?: string }) {
-  const key = taskDisplayStatus(t);
+function taskStatusTag(task: { phase?: string; status?: string }) {
+  const key = taskDisplayStatus(task);
   return {
-    label: taskStatusLabel[key] || key,
+    label: taskStatusLabel.value[key] || key,
     color: taskStatusTagColor[key] || taskStatusTagColor.queued,
   };
 }
@@ -164,7 +166,7 @@ function pct(done?: number, total?: number, status?: string) {
 }
 
 /** 扫描阶段：待下载=已发现数；下载阶段：待下载=剩余未完成 */
-function countTags(t?: {
+function countTags(task?: {
   phase?: string;
   status?: string;
   progressTotal?: number;
@@ -173,41 +175,41 @@ function countTags(t?: {
   doneFiles?: number;
   itemCounts?: ItemCounts | null;
 } | null) {
-  const listing = isListingPhase(t);
-  const total = Math.max(countOr0(t?.progressTotal), countOr0(t?.totalFiles));
-  const c = t?.itemCounts;
+  const listing = isListingPhase(task);
+  const total = Math.max(countOr0(task?.progressTotal), countOr0(task?.totalFiles));
+  const c = task?.itemCounts;
   if (listing) {
     return [
-      { key: "pending", label: "待下", value: total > 0 ? String(total) : "—" },
-      { key: "downloading", label: "下载", value: "—" },
-      { key: "done", label: "完成", value: "—" },
-      { key: "skipped", label: "跳过", value: "—" },
-      { key: "failed", label: "失败", value: "—" },
+      { key: "pending", label: t("channelDetail.pending"), value: total > 0 ? String(total) : t("common.dash") },
+      { key: "downloading", label: t("channelDetail.downloading"), value: t("common.dash") },
+      { key: "done", label: t("channelDetail.done"), value: t("common.dash") },
+      { key: "skipped", label: t("channelDetail.skipped"), value: t("common.dash") },
+      { key: "failed", label: t("channelDetail.failed"), value: t("common.dash") },
     ];
   }
   const processed =
     countOr0(c?.done) + countOr0(c?.skipped) + countOr0(c?.failed) + countOr0(c?.downloading);
   const remaining = Math.max(0, total - processed);
   return [
-    { key: "pending", label: "待下", value: String(remaining) },
-    { key: "downloading", label: "下载", value: String(countOr0(c?.downloading)) },
-    { key: "done", label: "完成", value: String(countOr0(c?.done)) },
-    { key: "skipped", label: "跳过", value: String(countOr0(c?.skipped)) },
-    { key: "failed", label: "失败", value: String(countOr0(c?.failed)) },
+    { key: "pending", label: t("channelDetail.pending"), value: String(remaining) },
+    { key: "downloading", label: t("channelDetail.downloading"), value: String(countOr0(c?.downloading)) },
+    { key: "done", label: t("channelDetail.done"), value: String(countOr0(c?.done)) },
+    { key: "skipped", label: t("channelDetail.skipped"), value: String(countOr0(c?.skipped)) },
+    { key: "failed", label: t("channelDetail.failed"), value: String(countOr0(c?.failed)) },
   ];
 }
 
-function hasFailedItems(t?: { status?: string; itemCounts?: ItemCounts | null } | null) {
-  return countOr0(t?.itemCounts?.failed) > 0 || t?.status === "failed";
+function hasFailedItems(task?: { status?: string; itemCounts?: ItemCounts | null } | null) {
+  return countOr0(task?.itemCounts?.failed) > 0 || task?.status === "failed";
 }
 
-function batchRangeText(t?: { fromMessageId?: number | null; count?: number | null } | null) {
-  if (!t) return "";
+function batchRangeText(task?: { fromMessageId?: number | null; count?: number | null } | null) {
+  if (!task) return "";
   const parts: string[] = [];
-  if (t.fromMessageId != null && Number.isFinite(t.fromMessageId)) {
-    parts.push(`起始：${t.fromMessageId}`);
+  if (task.fromMessageId != null && Number.isFinite(task.fromMessageId)) {
+    parts.push(t("channelDetail.batchFrom", { id: task.fromMessageId }));
   }
-  if (countOr0(t.count) > 0) parts.push(`数量：${t.count}`);
+  if (countOr0(task.count) > 0) parts.push(t("channelDetail.batchCount", { n: task.count }));
   return parts.join("｜");
 }
 
@@ -220,9 +222,9 @@ function coverageText() {
   if (!info.value) return "";
   const c = info.value.scanCursor || 0;
   const l = info.value.lastMessageId || 0;
-  if (l <= 0) return `水位 #${c || 0} · 最新未知（请先同步对话）`;
-  if (info.value.caughtUp) return `已追平最新 #${l}`;
-  return `已扫描到 #${c} / 最新 #${l}`;
+  if (l <= 0) return t("channelDetail.coverageUnknown", { cursor: c || 0 });
+  if (info.value.caughtUp) return t("channelDetail.caughtUpLatest", { last: l });
+  return t("channelDetail.scanned", { cursor: c, last: l });
 }
 
 function coveragePct() {
@@ -240,7 +242,7 @@ async function load(silent = false) {
     info.value = await api<ChannelDownloadInfo>(`/api/channels/${chatId.value}/download`);
     if (info.value.defaultBatchSize) batchSize.value = info.value.defaultBatchSize;
   } catch (e) {
-    if (!silent) message.error(e instanceof Error ? e.message : "加载失败");
+    if (!silent) message.error(e instanceof Error ? e.message : t("common.loadFailed"));
   } finally {
     if (!silent) loading.value = false;
   }
@@ -254,10 +256,10 @@ async function continueDownload() {
       method: "POST",
       body: JSON.stringify({ count: batchSize.value || 100, contentType: contentType.value }),
     });
-    message.success("已开始继续下载");
+    message.success(t("channelDetail.continueSuccess"));
     await load();
   } catch (e) {
-    message.error(e instanceof Error ? e.message : "入队失败");
+    message.error(e instanceof Error ? e.message : t("common.enqueueFailed"));
   } finally {
     submitting.value = false;
   }
@@ -271,7 +273,7 @@ function openCursorModal() {
 
 async function setCursor() {
   if (!chatId.value || cursorInput.value == null || cursorInput.value < 1) {
-    message.warning("请输入有效的消息 ID（最小为 1）");
+    message.warning(t("channelDetail.invalidMessageId"));
     return;
   }
   cursorSaving.value = true;
@@ -280,11 +282,11 @@ async function setCursor() {
       method: "POST",
       body: JSON.stringify({ mode: "set", messageId: cursorInput.value }),
     });
-    message.success(`水位已设为 #${cursorInput.value}`);
+    message.success(t("channelDetail.cursorSet", { id: cursorInput.value }));
     cursorModalOpen.value = false;
     await load();
   } catch (e) {
-    message.error(e instanceof Error ? e.message : "设置失败");
+    message.error(e instanceof Error ? e.message : t("common.setFailed"));
   } finally {
     cursorSaving.value = false;
   }
@@ -298,10 +300,10 @@ async function alignCursor() {
       method: "POST",
       body: JSON.stringify({ mode: "align" }),
     });
-    message.success(`已对齐水位 #${res.scanCursor}`);
+    message.success(t("channelDetail.cursorAligned", { id: res.scanCursor }));
     await load();
   } catch (e) {
-    message.error(e instanceof Error ? e.message : "对齐失败");
+    message.error(e instanceof Error ? e.message : t("channelDetail.alignFailed"));
   } finally {
     cursorSaving.value = false;
   }
@@ -332,16 +334,16 @@ const isCustom = computed(() => Boolean(info.value?.isCustom || info.value?.cust
 const completedBatchCount = computed(
   () =>
     (info.value?.recentBatches || []).filter(
-      (t) => t.status === "done" || t.status === "cancelled" || t.status === "failed",
+      (task) => task.status === "done" || task.status === "cancelled" || task.status === "failed",
     ).length,
 );
 
 function confirmDelete() {
   dialog.warning({
-    title: "删除自定义频道",
-    content: "确定删除该自定义频道？下载记录不会一并清除。",
-    positiveText: "删除",
-    negativeText: "取消",
+    title: t("channelDetail.deleteTitle"),
+    content: t("channelDetail.deleteContent"),
+    positiveText: t("common.delete"),
+    negativeText: t("common.cancel"),
     onPositiveClick: () => deleteCustom(),
   });
 }
@@ -351,10 +353,10 @@ async function deleteCustom() {
   deleting.value = true;
   try {
     await api(`/api/channels/${chatId.value}`, { method: "DELETE" });
-    message.success("已删除自定义频道");
+    message.success(t("channelDetail.deleteSuccess"));
     await router.push({ name: "channels" });
   } catch (e) {
-    message.error(e instanceof Error ? e.message : "删除失败");
+    message.error(e instanceof Error ? e.message : t("common.deleteFailed"));
   } finally {
     deleting.value = false;
   }
@@ -368,10 +370,14 @@ async function clearCompletedBatches(e?: Event) {
     const res = await api<{ cleared: number }>(`/api/channels/${chatId.value}/batches/completed`, {
       method: "DELETE",
     });
-    message.success(res.cleared ? `已清除 ${res.cleared} 条批次` : "没有可清除的已完成批次");
+    message.success(
+      res.cleared
+        ? t("channelDetail.clearedBatches", { n: res.cleared })
+        : t("channelDetail.nothingToClear"),
+    );
     await load();
   } catch (err) {
-    message.error(err instanceof Error ? err.message : "清除失败");
+    message.error(err instanceof Error ? err.message : t("common.clearFailed"));
   } finally {
     clearing.value = false;
   }
@@ -455,39 +461,11 @@ onUnmounted(() => {
 <template>
   <div class="page">
     <header class="head">
-      <div class="head-main">
-        <n-button quaternary size="small" @click="router.push({ name: 'channels' })">← 频道列表</n-button>
-        <div class="title-row">
-          <h2>
-            {{ info?.title || `频道 ${chatId}` }}
-            <span v-if="info?.username" class="title-at">@{{ info.username }}</span>
-          </h2>
-          <div class="title-actions">
-            <n-button size="small" :loading="loading" @click="() => load()">
-              <template #icon>
-                <n-icon :component="RefreshOutline" />
-              </template>
-              刷新
-            </n-button>
-            <template v-if="info">
-              <n-button size="small" @click="openCursorModal">
-                <template #icon>
-                  <n-icon :component="PulseOutline" />
-                </template>
-                调整水位
-              </n-button>
-              <n-button size="small" type="primary" ghost :loading="cursorSaving" @click="alignCursor">
-                <template #icon>
-                  <n-icon :component="SyncOutline" />
-                </template>
-                对齐水位
-              </n-button>
-            </template>
-          </div>
-        </div>
-      </div>
-      <div v-if="isCustom" class="head-actions">
+      <div class="head-top">
+        <n-button quaternary size="small" @click="router.push({ name: 'channels' })">{{ t("channelDetail.back") }}</n-button>
         <n-button
+          v-if="isCustom"
+          size="small"
           type="error"
           secondary
           :loading="deleting"
@@ -496,20 +474,48 @@ onUnmounted(() => {
           <template #icon>
             <n-icon :component="TrashOutline" />
           </template>
-          删除
+          {{ t("common.delete") }}
         </n-button>
+      </div>
+      <div class="title-row">
+        <h2>
+          {{ info?.title || t("channelDetail.fallbackTitle", { chatId }) }}
+          <span v-if="info?.username" class="title-at">@{{ info.username }}</span>
+        </h2>
+        <div class="title-actions">
+          <n-button size="small" :loading="loading" @click="() => load()">
+            <template #icon>
+              <n-icon :component="RefreshOutline" />
+            </template>
+            {{ t("common.refresh") }}
+          </n-button>
+          <template v-if="info">
+            <n-button size="small" @click="openCursorModal">
+              <template #icon>
+                <n-icon :component="PulseOutline" />
+              </template>
+              {{ t("channelDetail.adjustCursor") }}
+            </n-button>
+            <n-button size="small" type="primary" ghost :loading="cursorSaving" @click="alignCursor">
+              <template #icon>
+                <n-icon :component="SyncOutline" />
+              </template>
+              {{ t("channelDetail.alignCursor") }}
+            </n-button>
+          </template>
+        </div>
       </div>
     </header>
 
     <n-spin :show="loading && !info">
-      <n-empty v-if="!info && !loading" description="频道不存在" />
+      <n-empty v-if="!info && !loading" :description="t('channelDetail.notFound')" />
       <template v-else-if="info">
         <section class="summary">
           <div class="summary-top">
             <div class="summary-meta">
               <span class="coverage">{{ coverageText() }}</span>
-              <span class="stat">已下载 <b>{{ info.downloadedCount }}</b></span>
-              <span v-if="info.failedCount" class="stat">失败项 <b class="warn">{{ info.failedCount }}</b></span>
+              <span class="stat">{{ t("channelDetail.downloaded") }} <b>{{ info.downloadedCount }}</b></span>
+              <span v-if="info.failedCount" class="stat">{{ t("channelDetail.failedItems") }} <b class="warn">{{ info.failedCount }}</b></span>
             </div>
             <n-tag
               size="small"
@@ -523,11 +529,11 @@ onUnmounted(() => {
           <div class="download-row">
             <div class="batch-params">
               <div class="field">
-                <span class="field-label">每批条数</span>
+                <span class="field-label">{{ t("channelDetail.batchSize") }}</span>
                 <n-input-number v-model:value="batchSize" :min="50" :max="5000" :step="50" size="small" />
               </div>
               <div class="field">
-                <span class="field-label">下载内容</span>
+                <span class="field-label">{{ t("channelDetail.downloadContent") }}</span>
                 <n-select
                   v-model:value="contentType"
                   class="content-type"
@@ -545,13 +551,19 @@ onUnmounted(() => {
               <template #icon>
                 <n-icon :component="DownloadOutline" />
               </template>
-              {{ info.caughtUp ? "已追平最新" : info.activeTask ? "下载中" : "继续下载" }}
+              {{
+                info.caughtUp
+                  ? t("channelDetail.caughtUpBtn")
+                  : info.activeTask
+                    ? t("status.running")
+                    : t("channelDetail.continueDownload")
+              }}
             </n-button>
           </div>
         </section>
 
         <section v-if="info.activeTask" class="active">
-          <div class="sec-title">进行中</div>
+          <div class="sec-title">{{ t("channelDetail.activeTitle") }}</div>
           <div class="batch-card">
             <div class="batch-head">
               <div class="batch-head-main">
@@ -598,7 +610,7 @@ onUnmounted(() => {
                   <template #icon>
                     <n-icon :component="PauseOutline" />
                   </template>
-                  暂停
+                  {{ t("channelDetail.pause") }}
                 </n-button>
                 <n-button
                   v-if="info.activeTask.status === 'paused'"
@@ -610,7 +622,7 @@ onUnmounted(() => {
                   <template #icon>
                     <n-icon :component="PlayOutline" />
                   </template>
-                  继续
+                  {{ t("channelDetail.resume") }}
                 </n-button>
                 <n-button
                   v-if="info.activeTask.status !== 'cancelled' && info.activeTask.status !== 'done'"
@@ -622,7 +634,7 @@ onUnmounted(() => {
                   <template #icon>
                     <n-icon :component="CloseOutline" />
                   </template>
-                  取消
+                  {{ t("common.cancel") }}
                 </n-button>
                 <n-button
                   v-if="hasFailedItems(info.activeTask)"
@@ -634,7 +646,7 @@ onUnmounted(() => {
                   <template #icon>
                     <n-icon :component="ReloadOutline" />
                   </template>
-                  重试
+                  {{ t("channelDetail.retry") }}
                 </n-button>
               </div>
             </div>
@@ -645,7 +657,7 @@ onUnmounted(() => {
         <section class="history">
           <n-collapse>
             <n-collapse-item name="history">
-              <template #header>历史批次</template>
+              <template #header>{{ t("channelDetail.historyTitle") }}</template>
               <template #header-extra>
                 <n-button
                   size="small"
@@ -655,30 +667,30 @@ onUnmounted(() => {
                   :disabled="completedBatchCount <= 0"
                   @click="clearCompletedBatches"
                 >
-                  清除完成
+                  {{ t("channelDetail.clearCompleted") }}
                 </n-button>
               </template>
               <n-empty
                 v-if="!(info.recentBatches && info.recentBatches.length)"
-                description="暂无历史批次"
+                :description="t('channelDetail.historyEmpty')"
                 size="small"
               />
-              <div v-for="t in info.recentBatches" :key="t.id" class="batch-card dim">
+              <div v-for="task in info.recentBatches" :key="task.id" class="batch-card dim">
                 <div class="batch-head">
                   <div class="batch-head-main">
-                    <span class="batch-title">#{{ t.id }} {{ displayText(t.title) }}</span>
-                    <span v-if="batchRangeText(t)" class="batch-range">
-                      {{ batchRangeText(t) }}
+                    <span class="batch-title">#{{ task.id }} {{ displayText(task.title) }}</span>
+                    <span v-if="batchRangeText(task)" class="batch-range">
+                      {{ batchRangeText(task) }}
                     </span>
                   </div>
-                  <n-tag size="small" :bordered="false" :color="taskStatusTag(t).color">
-                    {{ taskStatusTag(t).label }}
+                  <n-tag size="small" :bordered="false" :color="taskStatusTag(task).color">
+                    {{ taskStatusTag(task).label }}
                   </n-tag>
                 </div>
                 <div class="meta counts">
                   <div class="count-texts">
                     <span
-                      v-for="tag in countTags(t)"
+                      v-for="tag in countTags(task)"
                       :key="tag.key"
                       class="count-text"
                       :style="{ color: countTagColor[tag.key]?.textColor }"
@@ -686,12 +698,12 @@ onUnmounted(() => {
                       {{ tag.label }} {{ tag.value }}
                     </span>
                   </div>
-                  <div v-if="hasFailedItems(t)" class="batch-actions">
-                    <n-button size="tiny" ghost type="warning" @click="retryFailed(t.id)">
+                  <div v-if="hasFailedItems(task)" class="batch-actions">
+                    <n-button size="tiny" ghost type="warning" @click="retryFailed(task.id)">
                       <template #icon>
                         <n-icon :component="ReloadOutline" />
                       </template>
-                      重试
+                      {{ t("channelDetail.retry") }}
                     </n-button>
                   </div>
                 </div>
@@ -705,27 +717,31 @@ onUnmounted(() => {
     <n-modal
       v-model:show="cursorModalOpen"
       preset="card"
-      title="调整水位"
+      :title="t('channelDetail.cursorTitle')"
       style="width: 420px; max-width: 92vw"
       :mask-closable="!cursorSaving"
     >
       <div class="cursor-modal">
         <p class="cursor-meta">
-          当前水位 <b>#{{ info?.scanCursor ?? 0 }}</b>
-          · 本地最大 <b>#{{ info?.localMaxMessageId ?? 0 }}</b>
-          · 对话最新 <b>#{{ info?.lastMessageId || "—" }}</b>
+          {{
+            t("channelDetail.cursorMeta", {
+              scan: info?.scanCursor ?? 0,
+              local: info?.localMaxMessageId ?? 0,
+              last: info?.lastMessageId || t("common.dash"),
+            })
+          }}
         </p>
         <div class="cursor-row">
           <n-input-number
             v-model:value="cursorInput"
             :min="1"
             :step="1"
-            placeholder="消息 ID"
+            :placeholder="t('channelDetail.messageId')"
             class="cursor-input"
           />
-          <n-button type="primary" :loading="cursorSaving" @click="setCursor">设置水位</n-button>
+          <n-button type="primary" :loading="cursorSaving" @click="setCursor">{{ t("channelDetail.setCursor") }}</n-button>
         </div>
-        <p class="cursor-hint">下次「继续下载」从该 id 之后扫描；已存在文件仍会去重跳过。</p>
+        <p class="cursor-hint">{{ t("channelDetail.cursorHint") }}</p>
       </div>
     </n-modal>
   </div>
@@ -733,9 +749,6 @@ onUnmounted(() => {
 
 <style scoped>
 .head {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
   margin-bottom: 16px;
 }
 .head h2 {
@@ -745,10 +758,13 @@ onUnmounted(() => {
   flex-wrap: wrap;
   align-items: baseline;
   gap: 8px;
-}
-.head-main {
   min-width: 0;
-  flex: 1;
+}
+.head-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
 }
 .title-row {
   display: flex;
@@ -757,13 +773,6 @@ onUnmounted(() => {
   justify-content: space-between;
   gap: 10px 12px;
   margin-top: 8px;
-}
-.head-actions {
-  display: flex;
-  flex-wrap: nowrap;
-  align-items: flex-start;
-  gap: 8px;
-  flex-shrink: 0;
 }
 .title-at {
   font-size: 14px;

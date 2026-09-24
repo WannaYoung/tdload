@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from "vue";
 import { useRouter } from "vue-router";
+import { useI18n } from "vue-i18n";
 import { NAlert, NButton, NIcon, NSpin, useMessage } from "naive-ui";
 import {
   AddOutline,
@@ -15,9 +16,11 @@ import { api } from "../../api/http";
 import type { DashboardStats } from "../../api/types";
 import { useAuthStore } from "../../stores/auth";
 import { useAppEvents } from "../../composables/useAppEvents";
+import { formatFromNow } from "../../i18n";
 import ResourceOverview from "./components/ResourceOverview.vue";
 import RecentTaskList, { type RecentTask } from "./components/RecentTaskList.vue";
 
+const { t } = useI18n();
 const router = useRouter();
 const auth = useAuthStore();
 const message = useMessage();
@@ -28,24 +31,24 @@ const tasks = ref<RecentTask[]>([]);
 
 const greeting = computed(() => {
   const hour = new Date().getHours();
-  if (hour < 6) return "夜深了";
-  if (hour < 12) return "上午好";
-  if (hour < 18) return "下午好";
-  return "晚上好";
+  if (hour < 6) return t("dashboard.greetingLate");
+  if (hour < 12) return t("dashboard.greetingMorning");
+  if (hour < 18) return t("dashboard.greetingAfternoon");
+  return t("dashboard.greetingEvening");
 });
 
-const displayName = computed(() => auth.user?.username || "管理员");
+const displayName = computed(() => auth.user?.username || t("dashboard.admin"));
 
 const subtitle = computed(() => {
   const s = stats.value;
-  if (!s) return `${greeting.value}，${displayName.value}`;
-  if (!s.tgConfigured) return "请先配置 Telegram API 凭证";
-  if (s.tgExpired > 0 || (s.tgAccounts > 0 && !s.tgActive)) return "Telegram 会话已失效，请重新登录";
-  if (!s.tgActive) return "尚未登录 Telegram，登录后可同步频道与下载";
-  if (s.tasksRunning > 0) return `当前有 ${s.tasksRunning} 个任务正在下载`;
-  if (s.tasksQueued > 0) return `队列中还有 ${s.tasksQueued} 个任务等待处理`;
-  if (s.tasksFailed > 0) return `${s.tasksFailed} 个任务失败，请到对应页面查看`;
-  return "系统运行正常";
+  if (!s) return t("dashboard.greetingWithName", { greeting: greeting.value, name: displayName.value });
+  if (!s.tgConfigured) return t("dashboard.needApi");
+  if (s.tgExpired > 0 || (s.tgAccounts > 0 && !s.tgActive)) return t("dashboard.sessionExpired");
+  if (!s.tgActive) return t("dashboard.notLoggedInTg");
+  if (s.tasksRunning > 0) return t("dashboard.tasksRunning", { n: s.tasksRunning });
+  if (s.tasksQueued > 0) return t("dashboard.tasksQueued", { n: s.tasksQueued });
+  if (s.tasksFailed > 0) return t("dashboard.tasksFailed", { n: s.tasksFailed });
+  return t("dashboard.systemOk");
 });
 
 const failureLinks = computed(() => {
@@ -53,20 +56,36 @@ const failureLinks = computed(() => {
   if (!s || !s.tasksFailed) return [];
   const links: { route: string; label: string; count: number }[] = [];
   if ((s.tasksFailedMessage ?? 0) > 0) {
-    links.push({ route: "tasks", label: `消息 ${s.tasksFailedMessage}`, count: s.tasksFailedMessage! });
+    links.push({
+      route: "tasks",
+      label: t("dashboard.failMessage", { n: s.tasksFailedMessage }),
+      count: s.tasksFailedMessage!,
+    });
   }
   if ((s.tasksFailedSaved ?? 0) > 0) {
-    links.push({ route: "saved", label: `收藏 ${s.tasksFailedSaved}`, count: s.tasksFailedSaved! });
+    links.push({
+      route: "saved",
+      label: t("dashboard.failSaved", { n: s.tasksFailedSaved }),
+      count: s.tasksFailedSaved!,
+    });
   }
   if ((s.tasksFailedChannel ?? 0) > 0) {
-    links.push({ route: "channels", label: `频道 ${s.tasksFailedChannel}`, count: s.tasksFailedChannel! });
+    links.push({
+      route: "channels",
+      label: t("dashboard.failChannel", { n: s.tasksFailedChannel }),
+      count: s.tasksFailedChannel!,
+    });
   }
   if ((s.tasksFailedWatch ?? 0) > 0) {
-    links.push({ route: "watch", label: `监听 ${s.tasksFailedWatch}`, count: s.tasksFailedWatch! });
+    links.push({
+      route: "watch",
+      label: t("dashboard.failWatch", { n: s.tasksFailedWatch }),
+      count: s.tasksFailedWatch!,
+    });
   }
   // 兼容旧后端未返回分项时，仍给一个总入口
   if (!links.length && s.tasksFailed > 0) {
-    links.push({ route: "tasks", label: "查看任务", count: s.tasksFailed });
+    links.push({ route: "tasks", label: t("dashboard.viewTasks"), count: s.tasksFailed });
   }
   return links;
 });
@@ -76,23 +95,47 @@ const failureHint = computed(() => {
   if (!links.length) return "";
   if (links.length === 1) {
     const map: Record<string, string> = {
-      tasks: "可在任务页查看原因并重试。",
-      saved: "可在收藏页查看同步失败记录。",
-      channels: "可在频道页查看下载失败批次。",
-      watch: "可在监听页查看相关任务。",
+      tasks: t("dashboard.hintTasks"),
+      saved: t("dashboard.hintSaved"),
+      channels: t("dashboard.hintChannels"),
+      watch: t("dashboard.hintWatch"),
     };
-    return map[links[0].route] || "请到对应页面查看。";
+    return map[links[0].route] || t("dashboard.hintGeneric");
   }
-  return "请到对应页面查看失败原因。";
+  return t("dashboard.hintMulti");
 });
 
 const kpis = computed(() => {
   const s = stats.value;
   return [
-    { key: "running", label: "下载中", value: s?.tasksRunning ?? 0, tone: "tone-running", icon: PlayCircleOutline },
-    { key: "queued", label: "排队", value: s?.tasksQueued ?? 0, tone: "tone-queued", icon: HourglassOutline },
-    { key: "done", label: "已完成", value: s?.tasksDone ?? 0, tone: "tone-done", icon: CheckmarkCircleOutline },
-    { key: "failed", label: "失败", value: s?.tasksFailed ?? 0, tone: "tone-fail", icon: AlertCircleOutline },
+    {
+      key: "running",
+      label: t("dashboard.kpiRunning"),
+      value: s?.tasksRunning ?? 0,
+      tone: "tone-running",
+      icon: PlayCircleOutline,
+    },
+    {
+      key: "queued",
+      label: t("dashboard.kpiQueued"),
+      value: s?.tasksQueued ?? 0,
+      tone: "tone-queued",
+      icon: HourglassOutline,
+    },
+    {
+      key: "done",
+      label: t("dashboard.kpiDone"),
+      value: s?.tasksDone ?? 0,
+      tone: "tone-done",
+      icon: CheckmarkCircleOutline,
+    },
+    {
+      key: "failed",
+      label: t("dashboard.kpiFailed"),
+      value: s?.tasksFailed ?? 0,
+      tone: "tone-fail",
+      icon: AlertCircleOutline,
+    },
   ];
 });
 
@@ -111,28 +154,22 @@ function formatSize(n: number): string {
   return `${(n / 1024 / 1024 / 1024).toFixed(2)} GB`;
 }
 
-function fromNow(iso: string): string {
-  const t = Date.parse(iso);
-  if (!Number.isFinite(t)) return "";
-  const d = Date.now() - t;
-  if (d < 60_000) return "刚刚";
-  if (d < 3_600_000) return `${Math.floor(d / 60_000)} 分钟前`;
-  if (d < 86_400_000) return `${Math.floor(d / 3_600_000)} 小时前`;
-  if (d < 7 * 86_400_000) return `${Math.floor(d / 86_400_000)} 天前`;
-  return new Date(t).toLocaleDateString("zh-CN");
-}
-
 const diskHint = computed(() => {
   const s = stats.value;
   if (!s) return "";
   if (!s.diskTotal) return s.downloadDir || "";
-  return `已用 ${formatSize(s.diskUsed)} · 可用 ${formatSize(s.diskAvailable)}`;
+  return t("dashboard.diskUsed", {
+    used: formatSize(s.diskUsed),
+    available: formatSize(s.diskAvailable),
+  });
 });
 
 const dialogsSyncedText = computed(() => {
   const s = stats.value;
   if (!s) return "";
-  return s.dialogsSyncedAt ? `同步于 ${fromNow(s.dialogsSyncedAt)}` : "尚未同步，请到 Telegram 页刷新";
+  return s.dialogsSyncedAt
+    ? t("dashboard.dialogsSynced", { time: formatFromNow(s.dialogsSyncedAt) })
+    : t("dashboard.dialogsNotSynced");
 });
 
 const recentTasks = computed(() => tasks.value.slice(0, 8));
@@ -153,7 +190,7 @@ async function refresh(silent = false) {
     error.value = "";
   } catch (err) {
     if (!silent) {
-      error.value = err instanceof Error ? err.message : "加载失败";
+      error.value = err instanceof Error ? err.message : t("common.loadFailed");
     }
   } finally {
     if (!silent) loading.value = false;
@@ -185,12 +222,18 @@ function applyEvent(raw: string) {
     };
     if (ev.type === "watch_hit") {
       const range = ev.done != null && ev.total != null ? `#${ev.done}–#${ev.total}` : "";
-      const count = ev.error ? `（${ev.error} 条）` : "";
-      message.info(`监听入队：${ev.title || ev.chatId || "对话"} ${range}${count}`);
+      const count = ev.error ? t("dashboard.watchHitCount", { n: ev.error }) : "";
+      message.info(
+        t("dashboard.watchHit", {
+          title: ev.title || ev.chatId || t("dashboard.dialogFallback"),
+          range,
+          count,
+        }),
+      );
       scheduleRefresh();
       return;
     }
-    const idx = tasks.value.findIndex((t) => t.id === ev.taskId);
+    const idx = tasks.value.findIndex((row) => row.id === ev.taskId);
     if (idx < 0) {
       if (ev.status || ev.type === "task_progress") scheduleRefresh();
       return;
@@ -228,27 +271,35 @@ onUnmounted(() => {
 
     <header v-if="stats" class="page-head">
       <div>
-        <h1>概览</h1>
-        <p class="sub">{{ greeting }}，{{ displayName }} · {{ subtitle }}</p>
+        <h1>{{ t("dashboard.title") }}</h1>
+        <p class="sub">
+          {{
+            t("dashboard.headSubtitle", {
+              greeting,
+              name: displayName,
+              detail: subtitle,
+            })
+          }}
+        </p>
       </div>
       <div class="page-head-actions">
         <n-button @click="refresh(false)">
           <template #icon>
             <n-icon :component="RefreshOutline" />
           </template>
-          刷新
+          {{ t("dashboard.refresh") }}
         </n-button>
         <n-button type="primary" ghost @click="go('telegram')">
           <template #icon>
             <n-icon :component="PaperPlaneOutline" />
           </template>
-          Telegram
+          {{ t("layout.telegram") }}
         </n-button>
         <n-button type="primary" @click="go('tasks')">
           <template #icon>
             <n-icon :component="AddOutline" />
           </template>
-          新建任务
+          {{ t("dashboard.newTask") }}
         </n-button>
       </div>
     </header>
@@ -256,29 +307,29 @@ onUnmounted(() => {
     <n-alert
       v-if="stats && !stats.tgActive"
       type="info"
-      title="尚未登录 Telegram"
+      :title="t('dashboard.notLoggedInTitle')"
       style="margin-bottom: 16px"
     >
       <div class="alert-body">
-        <span>登录后可同步频道、收藏，并开始下载任务。</span>
-        <n-button size="small" type="primary" @click="go('telegram')">去登录</n-button>
+        <span>{{ t("dashboard.notLoggedInBody") }}</span>
+        <n-button size="small" type="primary" @click="go('telegram')">{{ t("dashboard.goLogin") }}</n-button>
       </div>
     </n-alert>
     <n-alert
       v-else-if="stats && stats.tgExpired > 0"
       type="warning"
-      title="Telegram 会话已失效"
+      :title="t('dashboard.sessionExpiredTitle')"
       style="margin-bottom: 16px"
     >
       <div class="alert-body">
-        <span>请重新登录后再同步或下载。</span>
-        <n-button size="small" @click="go('telegram')">去处理</n-button>
+        <span>{{ t("dashboard.sessionExpiredBody") }}</span>
+        <n-button size="small" @click="go('telegram')">{{ t("dashboard.goHandle") }}</n-button>
       </div>
     </n-alert>
     <n-alert
       v-else-if="stats && failureLinks.length"
       type="warning"
-      :title="`${stats.tasksFailed} 个任务失败`"
+      :title="t('dashboard.tasksFailedTitle', { n: stats.tasksFailed })"
       style="margin-bottom: 16px"
     >
       <div class="alert-body">

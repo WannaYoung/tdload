@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from "vue";
+import { useI18n } from "vue-i18n";
 import {
   NAlert,
   NButton,
@@ -16,6 +17,7 @@ import { RefreshOutline, SyncOutline } from "@vicons/ionicons5";
 import { api } from "../../api/http";
 import type { TgStatus, TGSummary } from "../../api/types";
 
+const { t } = useI18n();
 const message = useMessage();
 const dialog = useDialog();
 const loading = ref(true);
@@ -59,7 +61,7 @@ async function load() {
     status.value = await api<TgStatus>("/api/tg/status");
     await loadSummary();
   } catch (e) {
-    message.error(e instanceof Error ? e.message : "加载失败");
+    message.error(e instanceof Error ? e.message : t("common.loadFailed"));
   } finally {
     loading.value = false;
   }
@@ -67,16 +69,16 @@ async function load() {
 
 async function syncAll() {
   if (!loggedIn.value) {
-    message.warning("请先登录 Telegram");
+    message.warning(t("telegram.needLogin"));
     return;
   }
   syncing.value = true;
   try {
     await api("/api/tg/sync", { method: "POST", body: JSON.stringify({ scope: "all" }) });
-    message.success("已同步频道/群与收藏");
+    message.success(t("telegram.syncSuccess"));
     await loadSummary();
   } catch (e) {
-    message.error(e instanceof Error ? e.message : "同步失败");
+    message.error(e instanceof Error ? e.message : t("common.syncFailed"));
   } finally {
     syncing.value = false;
   }
@@ -93,9 +95,9 @@ async function sendCode() {
     step.value = "code";
     form.code = "";
     form.password = "";
-    message.success(res.message || "验证码已发送");
+    message.success(res.message || t("telegram.codeSent"));
   } catch (e) {
-    message.error(e instanceof Error ? e.message : "发送失败");
+    message.error(e instanceof Error ? e.message : t("telegram.sendFailed"));
   } finally {
     busy.value = false;
   }
@@ -117,16 +119,16 @@ async function signIn() {
     );
     if (res.needPassword) {
       step.value = "password";
-      message.info("该账号开启了两步验证，请输入密码");
+      message.info(t("telegram.need2FA"));
       return;
     }
-    message.success("登录成功");
+    message.success(t("telegram.loginSuccess"));
     step.value = "idle";
     form.code = "";
     form.password = "";
     await load();
   } catch (e) {
-    message.error(e instanceof Error ? e.message : "登录失败");
+    message.error(e instanceof Error ? e.message : t("telegram.loginFailed"));
   } finally {
     busy.value = false;
   }
@@ -134,10 +136,10 @@ async function signIn() {
 
 function confirmLogout() {
   dialog.warning({
-    title: "退出 Telegram",
-    content: "确定退出 Telegram 会话？之后下载需要重新登录。",
-    positiveText: "退出",
-    negativeText: "取消",
+    title: t("telegram.logoutTitle"),
+    content: t("telegram.logoutContent"),
+    positiveText: t("telegram.logoutConfirm"),
+    negativeText: t("common.cancel"),
     onPositiveClick: () => logout(),
   });
 }
@@ -146,12 +148,12 @@ async function logout() {
   busy.value = true;
   try {
     await api("/api/tg/logout", { method: "POST", body: "{}" });
-    message.success("已退出");
+    message.success(t("telegram.logoutSuccess"));
     step.value = "idle";
     summary.value = null;
     await load();
   } catch (e) {
-    message.error(e instanceof Error ? e.message : "退出失败");
+    message.error(e instanceof Error ? e.message : t("telegram.logoutFailed"));
   } finally {
     busy.value = false;
   }
@@ -164,35 +166,35 @@ onMounted(() => void load());
   <div class="page">
     <header class="head">
       <div>
-        <h2>Telegram</h2>
+        <h2>{{ t("telegram.title") }}</h2>
       </div>
       <n-button :loading="loading" @click="load">
         <template #icon>
           <n-icon :component="RefreshOutline" />
         </template>
-        刷新
+        {{ t("common.refresh") }}
       </n-button>
     </header>
 
     <n-spin :show="loading">
       <n-card size="small" class="block">
-        <h3>账户</h3>
+        <h3>{{ t("telegram.account") }}</h3>
         <n-alert :type="loggedIn ? 'success' : 'info'" style="margin-bottom: 12px">
-          {{ status?.message || "未知状态" }}
+          {{ status?.message || t("telegram.unknownStatus") }}
         </n-alert>
 
         <div v-if="status?.user || loggedIn" class="user-bar">
           <div v-if="status?.user" class="user-row">
             <div class="user-item">
-              <span class="label">ID</span>
+              <span class="label">{{ t("telegram.id") }}</span>
               <span>{{ status.user.id }}</span>
             </div>
             <div v-if="status.user.username" class="user-item">
-              <span class="label">用户名</span>
+              <span class="label">{{ t("telegram.username") }}</span>
               <span>@{{ status.user.username }}</span>
             </div>
             <div v-if="status.user.phone" class="user-item">
-              <span class="label">手机</span>
+              <span class="label">{{ t("telegram.phone") }}</span>
               <span>{{ status.user.phone }}</span>
             </div>
           </div>
@@ -204,28 +206,28 @@ onMounted(() => void load());
             :loading="busy"
             @click="confirmLogout"
           >
-            退出登录
+            {{ t("telegram.logout") }}
           </n-button>
         </div>
       </n-card>
 
       <n-card v-if="loggedIn" size="small" class="block">
         <div class="card-title">
-          <h3>对话与收藏</h3>
-          <span v-if="syncedAtText" class="synced-at">上次同步 {{ syncedAtText }}</span>
+          <h3>{{ t("telegram.dialogsTitle") }}</h3>
+          <span v-if="syncedAtText" class="synced-at">{{ t("telegram.lastSynced", { time: syncedAtText }) }}</span>
         </div>
         <div class="stats-bar">
           <div class="stats">
             <div>
-              <span class="label">频道/群</span>
+              <span class="label">{{ t("telegram.channelsGroups") }}</span>
               {{ summary?.dialogCount ?? 0 }}
             </div>
             <div>
-              <span class="label">收藏</span>
+              <span class="label">{{ t("telegram.saved") }}</span>
               {{ summary?.savedCount ?? 0 }}
             </div>
             <div>
-              <span class="label">收藏已下</span>
+              <span class="label">{{ t("telegram.savedDownloaded") }}</span>
               {{ summary?.savedDownloaded ?? 0 }}
             </div>
           </div>
@@ -233,18 +235,18 @@ onMounted(() => void load());
             <template #icon>
               <n-icon :component="SyncOutline" />
             </template>
-            同步
+            {{ t("common.sync") }}
           </n-button>
         </div>
       </n-card>
 
       <n-card v-if="!loggedIn" size="small" class="block">
-        <h3>验证码登录</h3>
+        <h3>{{ t("telegram.loginTitle") }}</h3>
         <n-alert v-if="status && !status.configured" type="warning" style="margin-bottom: 12px">
-          API 凭证未就绪，请重启后端（会自动写入 Desktop 公开凭证）。
+          {{ t("telegram.apiNotReady") }}
         </n-alert>
         <n-form label-placement="top">
-          <n-form-item label="手机号（含国际区号）">
+          <n-form-item :label="t('telegram.phoneLabel')">
             <n-input
               v-model:value="form.phone"
               placeholder="+86138xxxxxxxx"
@@ -258,24 +260,24 @@ onMounted(() => void load());
             :disabled="!form.phone || !status?.configured"
             @click="sendCode"
           >
-            发送验证码
+            {{ t("telegram.sendCode") }}
           </n-button>
 
           <template v-if="step === 'code' || step === 'password'">
-            <n-form-item v-if="step === 'code'" label="验证码">
-              <n-input v-model:value="form.code" placeholder="Telegram / 短信验证码" />
+            <n-form-item v-if="step === 'code'" :label="t('telegram.codeLabel')">
+              <n-input v-model:value="form.code" :placeholder="t('telegram.codePlaceholder')" />
             </n-form-item>
-            <n-form-item label="两步验证密码（如有）">
+            <n-form-item :label="t('telegram.passwordLabel')">
               <n-input
                 v-model:value="form.password"
                 type="password"
                 show-password-on="click"
-                :placeholder="step === 'password' ? '必填' : '未开启可留空'"
+                :placeholder="step === 'password' ? t('telegram.passwordRequired') : t('telegram.passwordOptional')"
               />
             </n-form-item>
             <div class="actions">
-              <n-button type="primary" :loading="busy" @click="signIn">登录</n-button>
-              <n-button quaternary :disabled="busy" @click="step = 'idle'">重新开始</n-button>
+              <n-button type="primary" :loading="busy" @click="signIn">{{ t("telegram.signIn") }}</n-button>
+              <n-button quaternary :disabled="busy" @click="step = 'idle'">{{ t("telegram.restart") }}</n-button>
             </div>
           </template>
         </n-form>

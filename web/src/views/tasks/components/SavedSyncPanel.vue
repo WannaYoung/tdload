@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, h, ref, watch } from "vue";
+import { useI18n } from "vue-i18n";
 import {
   NButton,
   NDataTable,
@@ -11,6 +12,7 @@ import {
 import { TrashOutline } from "@vicons/ionicons5";
 import { api } from "../../../api/http";
 import type { ItemCounts } from "../../../api/types";
+import { dateLocaleTag } from "../../../i18n";
 
 export type SavedTask = {
   id: number;
@@ -33,6 +35,7 @@ const props = defineProps<{
   active: boolean;
 }>();
 
+const { t } = useI18n();
 const message = useMessage();
 const loading = ref(false);
 const submitting = ref(false);
@@ -48,10 +51,10 @@ const hasActiveSync = computed(() =>
 );
 
 function formatSyncTime(iso: string) {
-  if (!iso) return "—";
-  const t = Date.parse(iso);
-  if (!Number.isFinite(t)) return iso;
-  return new Date(t).toLocaleString("zh-CN", {
+  if (!iso) return t("common.dash");
+  const ts = Date.parse(iso);
+  if (!Number.isFinite(ts)) return iso;
+  return new Date(ts).toLocaleString(dateLocaleTag(), {
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
@@ -63,20 +66,20 @@ function formatSyncTime(iso: string) {
 }
 
 /** 拉取收藏列表阶段：收藏数可刷新，已同步显示 — */
-function isListing(t: SavedTask) {
-  if (t.phase === "listing") return true;
-  if (t.phase === "downloading") return false;
+function isListing(row: SavedTask) {
+  if (row.phase === "listing") return true;
+  if (row.phase === "downloading") return false;
   // 兼容：刚创建 / 初始 phase=running，尚未进入 downloading
   return (
-    (t.status === "queued" || t.status === "running") &&
-    countOr0(t.progressDone) === 0 &&
-    countOr0(t.doneFiles) === 0 &&
+    (row.status === "queued" || row.status === "running") &&
+    countOr0(row.progressDone) === 0 &&
+    countOr0(row.doneFiles) === 0 &&
     !(
-      t.itemCounts &&
-      (countOr0(t.itemCounts.done) ||
-        countOr0(t.itemCounts.skipped) ||
-        countOr0(t.itemCounts.failed) ||
-        countOr0(t.itemCounts.downloading))
+      row.itemCounts &&
+      (countOr0(row.itemCounts.done) ||
+        countOr0(row.itemCounts.skipped) ||
+        countOr0(row.itemCounts.failed) ||
+        countOr0(row.itemCounts.downloading))
     )
   );
 }
@@ -85,24 +88,24 @@ function countOr0(n: number | undefined | null) {
   return typeof n === "number" && Number.isFinite(n) ? n : 0;
 }
 
-function savedTotal(t: SavedTask) {
+function savedTotal(row: SavedTask) {
   // 收藏数 = 拉取得到的总数；不要用 itemCounts 合计（下载时会随已处理条数一起涨）
-  return Math.max(countOr0(t.progressTotal), countOr0(t.totalFiles));
+  return Math.max(countOr0(row.progressTotal), countOr0(row.totalFiles));
 }
 
-function savedDone(t: SavedTask) {
-  if (isListing(t)) return null;
-  if (t.itemCounts) return countOr0(t.itemCounts.done) + countOr0(t.itemCounts.skipped);
-  return countOr0(t.progressDone) || countOr0(t.doneFiles) || 0;
+function savedDone(row: SavedTask) {
+  if (isListing(row)) return null;
+  if (row.itemCounts) return countOr0(row.itemCounts.done) + countOr0(row.itemCounts.skipped);
+  return countOr0(row.progressDone) || countOr0(row.doneFiles) || 0;
 }
 
-function savedFailed(t: SavedTask) {
-  if (isListing(t)) return null;
-  return countOr0(t.itemCounts?.failed);
+function savedFailed(row: SavedTask) {
+  if (isListing(row)) return null;
+  return countOr0(row.itemCounts?.failed);
 }
 
 function displayCount(n: number | null) {
-  if (n == null || !Number.isFinite(n)) return "—";
+  if (n == null || !Number.isFinite(n)) return t("common.dash");
   return String(n);
 }
 
@@ -116,7 +119,7 @@ async function load(silent = false) {
     const page = await api<{ items: SavedTask[] }>("/api/tasks?kind=saved&page=1&pageSize=50");
     tasks.value = page.items || [];
   } catch (e) {
-    if (!silent) message.error(e instanceof Error ? e.message : "加载失败");
+    if (!silent) message.error(e instanceof Error ? e.message : t("common.loadFailed"));
   } finally {
     if (!silent) loading.value = false;
   }
@@ -129,11 +132,11 @@ async function createTask() {
       method: "POST",
       body: JSON.stringify({ source: "saved_all" }),
     });
-    message.success("已开始同步");
-    const rest = tasks.value.filter((t) => t.id !== task.id);
+    message.success(t("savedSync.syncStarted"));
+    const rest = tasks.value.filter((row) => row.id !== task.id);
     tasks.value = [task, ...rest];
   } catch (e) {
-    message.error(e instanceof Error ? e.message : "创建失败");
+    message.error(e instanceof Error ? e.message : t("common.createFailed"));
   } finally {
     submitting.value = false;
   }
@@ -143,10 +146,10 @@ async function deleteTask(id: number) {
   try {
     await api(`/api/tasks/${id}/cancel`, { method: "POST", body: "{}" }).catch(() => undefined);
     await api(`/api/tasks/${id}`, { method: "DELETE" });
-    message.success("已删除");
+    message.success(t("savedSync.deleted"));
     await load();
   } catch (e) {
-    message.error(e instanceof Error ? e.message : "删除失败");
+    message.error(e instanceof Error ? e.message : t("common.deleteFailed"));
   }
 }
 
@@ -154,10 +157,12 @@ async function clearCompleted() {
   clearing.value = true;
   try {
     const res = await api<{ cleared: number }>("/api/tasks/completed?kind=saved", { method: "DELETE" });
-    message.success(res.cleared ? `已清除 ${res.cleared} 条记录` : "没有可清除的已结束记录");
+    message.success(
+      res.cleared ? t("savedSync.cleared", { n: res.cleared }) : t("savedSync.nothingToClear"),
+    );
     await load();
   } catch (e) {
-    message.error(e instanceof Error ? e.message : "清除失败");
+    message.error(e instanceof Error ? e.message : t("common.clearFailed"));
   } finally {
     clearing.value = false;
   }
@@ -210,17 +215,17 @@ function applyProgress(ev: {
 }
 
 const columns = computed<DataTableColumns<SavedTask>>(() => [
-  { title: "收藏数", key: "total", width: 100, render: (r) => String(savedTotal(r)) },
-  { title: "已同步", key: "done", width: 100, render: (r) => coloredCount(savedDone(r), "#86efac") },
-  { title: "同步失败", key: "failed", width: 100, render: (r) => coloredCount(savedFailed(r), "#fca5a5") },
+  { title: t("savedSync.total"), key: "total", width: 100, render: (r) => String(savedTotal(r)) },
+  { title: t("savedSync.done"), key: "done", width: 100, render: (r) => coloredCount(savedDone(r), "#86efac") },
+  { title: t("savedSync.failed"), key: "failed", width: 100, render: (r) => coloredCount(savedFailed(r), "#fca5a5") },
   {
-    title: "同步时间",
+    title: t("savedSync.createdAt"),
     key: "createdAt",
     ellipsis: { tooltip: true },
     render: (r) => formatSyncTime(r.createdAt),
   },
   {
-    title: "操作",
+    title: t("savedSync.actions"),
     key: "actions",
     width: 72,
     align: "right",
@@ -231,7 +236,7 @@ const columns = computed<DataTableColumns<SavedTask>>(() => [
           size: "tiny",
           secondary: true,
           type: "error",
-          title: "停止并删除",
+          title: t("savedSync.stopDelete"),
           onClick: () => void deleteTask(r.id),
         },
         { icon: () => h(NIcon, { component: TrashOutline }) },
@@ -272,7 +277,7 @@ defineExpose({
         :row-key="(r: SavedTask) => r.id"
       >
         <template #empty>
-          <n-empty description="暂无同步记录" />
+          <n-empty :description="t('savedSync.empty')" />
         </template>
       </n-data-table>
     </div>

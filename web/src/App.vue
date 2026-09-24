@@ -1,13 +1,13 @@
 <script setup lang="ts">
+import { computed } from "vue";
 import {
   darkTheme,
-  dateZhCN,
   NConfigProvider,
   NDialogProvider,
   NMessageProvider,
-  zhCN,
   type GlobalThemeOverrides,
 } from "naive-ui";
+import { naiveDateLocale, naiveLocale } from "./i18n";
 
 /** 深色 + 粉色高亮 */
 const themeOverrides: GlobalThemeOverrides = {
@@ -40,14 +40,17 @@ const themeOverrides: GlobalThemeOverrides = {
     itemIconColorChildActive: "#f472b6",
   },
 };
+
+const locale = computed(() => naiveLocale.value);
+const dateLocale = computed(() => naiveDateLocale.value);
 </script>
 
 <template>
   <n-config-provider
     :theme="darkTheme"
     :theme-overrides="themeOverrides"
-    :locale="zhCN"
-    :date-locale="dateZhCN"
+    :locale="locale"
+    :date-locale="dateLocale"
   >
     <n-message-provider>
       <n-dialog-provider>

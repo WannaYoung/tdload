@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, h, onMounted, onUnmounted, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
+import { useI18n } from "vue-i18n";
 import {
   NButton,
   NDropdown,
@@ -30,10 +31,12 @@ import { useMobile } from "../composables/useMobile";
 import { applyNoImageSetting } from "../composables/useNoImage";
 import { api } from "../api/http";
 import type { DashboardStats, Settings } from "../api/types";
+import LanguageSwitcher from "../components/LanguageSwitcher.vue";
 
 const BADGE_STYLE =
   "display:inline-flex;align-items:center;justify-content:center;min-width:18px;height:18px;padding:0 5px;border-radius:9px;background:#f472b6;color:#500724;font-size:11px;font-weight:600;line-height:1;flex-shrink:0;";
 
+const { t } = useI18n();
 const route = useRoute();
 const router = useRouter();
 const auth = useAuthStore();
@@ -91,26 +94,26 @@ function menuLabel(text: string, count: number) {
 }
 
 const menuOptions = computed<MenuOption[]>(() => [
-  { label: "仪表盘", key: "dashboard", icon: icon(GridOutline) },
-  { label: "Telegram", key: "telegram", icon: icon(PaperPlaneOutline) },
+  { label: t("layout.dashboard"), key: "dashboard", icon: icon(GridOutline) },
+  { label: t("layout.telegram"), key: "telegram", icon: icon(PaperPlaneOutline) },
   {
-    label: menuLabel("收藏", savedActive.value),
+    label: menuLabel(t("layout.saved"), savedActive.value),
     key: "saved",
     icon: menuIcon(HeartOutline, savedActive.value),
   },
   {
-    label: menuLabel("频道", channelActive.value),
+    label: menuLabel(t("layout.channels"), channelActive.value),
     key: "channels",
     icon: menuIcon(PeopleOutline, channelActive.value),
   },
   {
-    label: menuLabel("任务", messageActive.value),
+    label: menuLabel(t("layout.tasks"), messageActive.value),
     key: "tasks",
     icon: menuIcon(CloudDownloadOutline, messageActive.value),
   },
-  { label: "监听", key: "watch", icon: icon(EyeOutline) },
-  { label: "资源库", key: "library", icon: icon(FolderOpenOutline) },
-  { label: "设置", key: "settings", icon: icon(SettingsOutline) },
+  { label: t("layout.watch"), key: "watch", icon: icon(EyeOutline) },
+  { label: t("layout.library"), key: "library", icon: icon(FolderOpenOutline) },
+  { label: t("layout.settings"), key: "settings", icon: icon(SettingsOutline) },
 ]);
 
 const headerBadgeTotal = computed(
@@ -124,15 +127,18 @@ const dropdownOptions = computed<DropdownOption[]>(() => [
     label: () =>
       h(
         "span",
-        { style: { color: "rgba(255, 255, 255, 0.45)" }, title: auth.user?.username || "已登录" },
-        auth.user?.username || "已登录",
+        {
+          style: { color: "rgba(255, 255, 255, 0.45)" },
+          title: auth.user?.username || t("layout.loggedIn"),
+        },
+        auth.user?.username || t("layout.loggedIn"),
       ),
     key: "user",
     disabled: true,
     icon: icon(PersonCircleOutline),
   },
   {
-    label: () => h("span", { style: { color: "#f9a8d4" } }, "退出"),
+    label: () => h("span", { style: { color: "#f9a8d4" } }, t("layout.logout")),
     key: "logout",
     icon: () => h(NIcon, { color: "#f472b6" }, { default: () => h(LogOutOutline) }),
   },
@@ -206,10 +212,10 @@ function goHome() {
 
 function confirmLogout() {
   dialog.warning({
-    title: "退出登录",
-    content: "确定退出当前账号？",
-    positiveText: "退出",
-    negativeText: "取消",
+    title: t("layout.logoutTitle"),
+    content: t("layout.logoutConfirm"),
+    positiveText: t("layout.logout"),
+    negativeText: t("common.cancel"),
     onPositiveClick: () => {
       auth.logout();
       void router.push({ name: "login" });
@@ -249,9 +255,10 @@ function confirmLogout() {
         <button class="header-left brand-btn" type="button" @click="goHome">
           <n-icon v-if="isMobile" size="20" :component="PaperPlaneOutline" />
           <span v-if="isMobile" class="brand-text">TDLoad</span>
-          <span v-else class="muted">Telegram 批量下载控制台</span>
+          <span v-else class="muted">{{ t("layout.consoleTitle") }}</span>
         </button>
         <div v-if="isMobile" class="header-right">
+          <LanguageSwitcher />
           <n-dropdown
             trigger="click"
             placement="bottom-end"
@@ -261,7 +268,7 @@ function confirmLogout() {
             @select="onDropdownSelect"
           >
             <span class="menu-btn-wrap">
-              <n-button quaternary circle aria-label="菜单">
+              <n-button quaternary circle :aria-label="t('layout.menu')">
                 <n-icon size="22" :component="MenuOutline" />
               </n-button>
               <span v-if="headerBadgeTotal > 0" class="header-task-badge">
@@ -272,11 +279,12 @@ function confirmLogout() {
         </div>
         <div v-else class="header-right">
           <span class="muted">{{ auth.user?.username }}</span>
+          <LanguageSwitcher />
           <n-button size="small" type="primary" @click="confirmLogout">
             <template #icon>
               <n-icon :component="LogOutOutline" />
             </template>
-            退出
+            {{ t("layout.logout") }}
           </n-button>
         </div>
       </header>
@@ -374,6 +382,9 @@ function confirmLogout() {
   display: flex;
   align-items: center;
   gap: 12px;
+}
+.header.mobile .header-right {
+  gap: 4px;
 }
 .muted {
   color: rgba(255, 255, 255, 0.45);

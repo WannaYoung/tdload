@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from "vue";
+import { computed, onMounted, onUnmounted, ref, watch } from "vue";
+import { useI18n } from "vue-i18n";
 import { NButton, NEmpty, NIcon, NSelect, NSpin, useMessage } from "naive-ui";
 import { PlayOutline, RefreshOutline, SyncOutline } from "@vicons/ionicons5";
 import { api, ensureTicket, getToken } from "../../api/http";
@@ -35,6 +36,7 @@ function writeSavedFilters(chatVal: string, mediaVal: string) {
 const saved = readSavedFilters();
 const allowedMedia = new Set(["all", "image", "video"]);
 
+const { t, locale } = useI18n();
 const { noImage } = useNoImage();
 const message = useMessage();
 const loading = ref(false);
@@ -56,16 +58,13 @@ const imgReady = ref(false);
 const touchStartX = ref(0);
 const viewerRef = ref<{ pauseVideo: () => void } | null>(null);
 
-const filterOptions = ref<{ label: string; value: string }[]>([
-  { label: "全部频道", value: "all" },
-  { label: "我的收藏", value: "saved" },
-]);
+const filterOptions = ref<{ label: string; value: string }[]>([]);
 
-const mediaOptions = [
-  { label: "全部", value: "all" },
-  { label: "图片", value: "image" },
-  { label: "视频", value: "video" },
-];
+const mediaOptions = computed(() => [
+  { label: t("mediaKind.all"), value: "all" },
+  { label: t("mediaKind.image"), value: "image" },
+  { label: t("mediaKind.video"), value: "video" },
+]);
 
 const browseable = computed(() =>
   items.value.filter((it) => {
@@ -83,14 +82,14 @@ const counter = computed(() => {
 });
 
 function fileUrl(id: number) {
-  const t = mediaToken.value || getToken();
-  return t ? `/api/library/${id}/file?token=${encodeURIComponent(t)}` : "";
+  const tok = mediaToken.value || getToken();
+  return tok ? `/api/library/${id}/file?token=${encodeURIComponent(tok)}` : "";
 }
 
 /** 列表缩略图 / 视频封面 */
 function thumbUrl(id: number) {
-  const t = mediaToken.value || getToken();
-  return t ? `/api/library/${id}/thumb?token=${encodeURIComponent(t)}` : "";
+  const tok = mediaToken.value || getToken();
+  return tok ? `/api/library/${id}/thumb?token=${encodeURIComponent(tok)}` : "";
 }
 
 function thumbSrc(it: LibraryItem) {
@@ -109,10 +108,10 @@ async function loadFilters() {
     const data = await api<{ items: { key: string; chatId: number; title: string }[] }>(
       "/api/library/filters",
     );
-    const opts = [{ label: "全部频道", value: "all" }];
+    const opts = [{ label: t("library.allChannels"), value: "all" }];
     for (const it of data.items || []) {
       if (it.key === "saved") {
-        opts.push({ label: "我的收藏", value: "saved" });
+        opts.push({ label: t("library.mySaved"), value: "saved" });
       } else {
         opts.push({ label: it.title || String(it.chatId), value: String(it.chatId) });
       }
@@ -124,7 +123,10 @@ async function loadFilters() {
       writeSavedFilters(chat.value, mediaType.value);
     }
   } catch {
-    /* keep default */
+    filterOptions.value = [
+      { label: t("library.allChannels"), value: "all" },
+      { label: t("library.mySaved"), value: "saved" },
+    ];
   }
 }
 
@@ -151,7 +153,7 @@ async function load() {
     items.value = data.items || [];
     total.value = data.total || 0;
   } catch (e) {
-    message.error(e instanceof Error ? e.message : "加载失败");
+    message.error(e instanceof Error ? e.message : t("common.loadFailed"));
   } finally {
     loading.value = false;
   }
@@ -168,12 +170,16 @@ async function syncDisk() {
       },
     );
     message.success(
-      `同步完成：保留 ${data.kept}，清理 ${data.pruned}，导入 ${data.imported}`,
+      t("library.syncSuccess", {
+        kept: data.kept,
+        pruned: data.pruned,
+        imported: data.imported,
+      }),
     );
     await loadFilters();
     await load();
   } catch (e) {
-    message.error(e instanceof Error ? e.message : "扫盘失败");
+    message.error(e instanceof Error ? e.message : t("library.syncFailed"));
   } finally {
     syncing.value = false;
   }
@@ -183,11 +189,11 @@ async function removeItem(it: LibraryItem, withFile: boolean) {
   try {
     const q = withFile ? "?delete_file=1" : "";
     await api(`/api/library/${it.id}${q}`, { method: "DELETE" });
-    message.success(withFile ? "已删除索引与文件" : "已删除索引");
+    message.success(withFile ? t("library.deletedIndexAndFile") : t("library.deletedIndex"));
     closeViewer();
     await load();
   } catch (e) {
-    message.error(e instanceof Error ? e.message : "删除失败");
+    message.error(e instanceof Error ? e.message : t("common.deleteFailed"));
   }
 }
 
@@ -252,8 +258,14 @@ function onKey(e: KeyboardEvent) {
 }
 
 
+watch(locale, () => void loadFilters());
+
 onMounted(() => {
   window.addEventListener("keydown", onKey);
+  filterOptions.value = [
+    { label: t("library.allChannels"), value: "all" },
+    { label: t("library.mySaved"), value: "saved" },
+  ];
   void loadFilters();
   void load();
 });
@@ -267,19 +279,19 @@ onUnmounted(() => {
 <template>
   <div class="page list-page pinned">
     <div class="toolbar">
-      <h2>资源库</h2>
+      <h2>{{ t("library.title") }}</h2>
       <div class="toolbar-actions">
         <n-button :loading="loading" @click="load">
           <template #icon>
             <n-icon :component="RefreshOutline" />
           </template>
-          刷新
+          {{ t("common.refresh") }}
         </n-button>
         <n-button type="primary" :loading="syncing" @click="syncDisk">
           <template #icon>
             <n-icon :component="SyncOutline" />
           </template>
-          同步
+          {{ t("common.sync") }}
         </n-button>
       </div>
     </div>
@@ -301,7 +313,7 @@ onUnmounted(() => {
 
     <div class="table-wrap">
       <n-spin :show="loading" class="spin-fill">
-        <n-empty v-if="!items.length && !loading" description="暂无可用文件" />
+        <n-empty v-if="!items.length && !loading" :description="t('library.empty')" />
         <div v-else class="grid">
           <button
             v-for="it in items"
@@ -344,7 +356,7 @@ onUnmounted(() => {
                 </span>
               </div>
             </template>
-            <div v-else class="thumb placeholder">无预览</div>
+            <div v-else class="thumb placeholder">{{ t("library.noPreview") }}</div>
             <div class="cap" :title="it.fileName">{{ it.fileName }}</div>
           </button>
         </div>
@@ -352,9 +364,9 @@ onUnmounted(() => {
     </div>
 
     <div v-if="total > pageSize" class="pager">
-      <n-button size="small" :disabled="page <= 1" @click="page--; load()">上一页</n-button>
+      <n-button size="small" :disabled="page <= 1" @click="page--; load()">{{ t("common.prevPage") }}</n-button>
       <span>{{ page }} / {{ Math.max(1, Math.ceil(total / pageSize)) }}</span>
-      <n-button size="small" :disabled="page * pageSize >= total" @click="page++; load()">下一页</n-button>
+      <n-button size="small" :disabled="page * pageSize >= total" @click="page++; load()">{{ t("common.nextPage") }}</n-button>
     </div>
 
     <MediaViewer
@@ -507,4 +519,3 @@ h2 {
   }
 }
 </style>
-
