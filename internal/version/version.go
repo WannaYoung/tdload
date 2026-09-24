@@ -4,7 +4,7 @@ package version
 var Version = "0.1.5"
 
 // SourceURL AGPL 源码获取地址。
-const SourceURL = "https://wygitea.tocmcc.cn/yang/tdload"
+const SourceURL = "https://github.com/WannaYoung/tdload"
 
 // License 许可证标识。
 const License = "AGPL-3.0"

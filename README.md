@@ -1,9 +1,11 @@
 # TDLoad
 
+**中文** | [English](README_EN.md)
+
 自托管 Telegram 批量下载与监听控制台（单用户 Web）。后端 Go + [iyear/tdl](https://github.com/iyear/tdl) / gotd，前端 Vue 3 + Naive UI（深色 + 粉主色）。
 
-**开发文档：** [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md)  
-**镜像：** [wannayoung/tdload](https://hub.docker.com/r/wannayoung/tdload)（`linux/amd64` · `linux/arm64`）
+**镜像：** [wannayoung/tdload](https://hub.docker.com/r/wannayoung/tdload)（`linux/amd64` · `linux/arm64`）  
+**源码：** [github.com/WannaYoung/tdload](https://github.com/WannaYoung/tdload)
 
 ## 功能
 
@@ -44,6 +46,27 @@
 
 首次启动若配置文件不存在，会按容器路径自动生成（下载目录 `/tdload/downloads`，数据库与 session 在 `/tdload/config/`）。
 
+示例 `compose.yml`（仅拉镜像部署；仓库根目录的 [docker-compose.yml](docker-compose.yml) 另含 `build: .` 便于本地构建）：
+
+```yaml
+services:
+  tdload:
+    image: wannayoung/tdload:latest
+    container_name: tdload
+    restart: unless-stopped
+    ports:
+      - "3080:3080"
+    environment:
+      ADMIN_USERNAME: ${ADMIN_USERNAME:?set ADMIN_USERNAME in .env}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?set ADMIN_PASSWORD in .env}
+      PROXY: ${PROXY:-}
+    volumes:
+      - ./data/config:/tdload/config
+      - ./data/downloads:/tdload/downloads
+```
+
+同目录准备 `.env`（管理员与代理从这里注入，勿提交真实 `.env`）：
+
 ```bash
 cp .env.example .env
 # 必填：ADMIN_USERNAME / ADMIN_PASSWORD
@@ -51,7 +74,7 @@ cp .env.example .env
 
 docker compose pull
 docker compose up -d
-# 或本地构建：docker compose up -d --build
+# 或从本仓库构建：docker compose up -d --build
 ```
 
 | 项 | 容器 | 说明 |
