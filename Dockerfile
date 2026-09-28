@@ -12,7 +12,9 @@ RUN pnpm build
 FROM golang:1.26-bookworm AS builder
 WORKDIR /src
 ENV CGO_ENABLED=0
-ARG VERSION=0.1.6
+ARG VERSION=0.1.8
+ARG GOPROXY=https://proxy.golang.org,direct
+ENV GOPROXY=$GOPROXY
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .

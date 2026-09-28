@@ -16,12 +16,17 @@ defineProps<{
 
 <style scoped>
 .cov {
-  width: 140px;
+  width: 100%;
+  min-width: 0;
+  max-width: 140px;
 }
 .cov-text {
   margin-top: 2px;
   font-size: 11px;
   color: rgba(255, 255, 255, 0.45);
   font-variant-numeric: tabular-nums;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 </style>

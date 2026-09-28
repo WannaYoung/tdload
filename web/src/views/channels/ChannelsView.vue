@@ -120,13 +120,14 @@ const columns = computed<DataTableColumns<ChannelRow>>(() => [
   {
     title: t("channels.name"),
     key: "title",
+    minWidth: 120,
     ellipsis: { tooltip: true },
     render: (r) => {
       const name = r.title || String(r.chatId);
       const uname = r.username ? `@${r.username}` : "";
       return h(
         "button",
-        { class: "name-btn", type: "button", onClick: () => openDetail(r) },
+        { class: "name-btn", type: "button", onClick: () => openDetail(r), title: uname ? `${name}\n${uname}` : name },
         [
           h("div", { class: "name-title" }, name),
           uname ? h("div", { class: "name-sub" }, uname) : null,
@@ -137,7 +138,7 @@ const columns = computed<DataTableColumns<ChannelRow>>(() => [
   {
     title: t("channels.kind"),
     key: "kind",
-    width: 90,
+    width: 72,
     render: (r) => {
       const kind = isCustomRow(r) ? "custom" : r.kind;
       const meta = kindMeta.value[kind] || {
@@ -150,7 +151,7 @@ const columns = computed<DataTableColumns<ChannelRow>>(() => [
   {
     title: t("channels.coverage"),
     key: "coverage",
-    width: 160,
+    width: 120,
     render: (r) => {
       const c = r.scanCursor ?? r.lastDownloadedMessageId ?? 0;
       const l = r.lastMessageId || 0;
@@ -166,13 +167,13 @@ const columns = computed<DataTableColumns<ChannelRow>>(() => [
   {
     title: t("channels.downloaded"),
     key: "downloadedCount",
-    width: 88,
+    width: 72,
     render: (r) => String(r.downloadedCount ?? 0),
   },
   {
     title: t("channels.statusCol"),
     key: "status",
-    width: 90,
+    width: 72,
     render: (r) => {
       const meta = statusMeta.value[r.status || "idle"] || statusMeta.value.idle;
       return h("span", { class: "status-text", style: { color: meta.color } }, meta.label);
@@ -181,7 +182,7 @@ const columns = computed<DataTableColumns<ChannelRow>>(() => [
   {
     title: t("channels.actions"),
     key: "actions",
-    width: 112,
+    width: 88,
     align: "right",
     render: (r) =>
       h("div", { class: "row-actions" }, [
@@ -334,8 +335,17 @@ onMounted(() => void load());
   padding: 0;
   text-align: left;
   cursor: pointer;
+  display: block;
+  width: 100%;
+  max-width: 100%;
   min-width: 0;
   color: inherit;
+}
+:deep(.name-title),
+:deep(.name-sub) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 :deep(.name-title) {
   font-size: 13px;
@@ -355,7 +365,7 @@ onMounted(() => void load());
   display: inline-flex;
   align-items: center;
   justify-content: flex-end;
-  gap: 12px;
+  gap: 8px;
 }
 :deep(.icon-square) {
   width: 32px;

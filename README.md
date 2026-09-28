@@ -86,7 +86,7 @@ docker compose up -d
 | 管理员 | `ADMIN_USERNAME` / `ADMIN_PASSWORD` | **必填** |
 | 代理 | `PROXY` | 可选，覆盖配置文件中的代理 |
 
-标签示例：`wannayoung/tdload:latest`、`wannayoung/tdload:0.1.6`。
+标签示例：`wannayoung/tdload:latest`、`wannayoung/tdload:0.1.8`。
 
 ## 本地调试
 

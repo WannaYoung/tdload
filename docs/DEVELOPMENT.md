@@ -881,8 +881,8 @@ WEB_DIR=/app/web
 docker buildx create --use --name tdload-builder || true
 docker buildx build \
   --platform linux/amd64,linux/arm64 \
-  --build-arg VERSION=0.1.6 \
-  -t wannayoung/tdload:0.1.6 \
+  --build-arg VERSION=0.1.8 \
+  -t wannayoung/tdload:0.1.8 \
   -t wannayoung/tdload:latest \
   --push .
 ```

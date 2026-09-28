@@ -86,7 +86,7 @@ docker compose up -d
 | Admin | `ADMIN_USERNAME` / `ADMIN_PASSWORD` | **required** |
 | Proxy | `PROXY` | optional; overrides proxy in config |
 
-Tags: `wannayoung/tdload:latest`, `wannayoung/tdload:0.1.6`.
+Tags: `wannayoung/tdload:latest`, `wannayoung/tdload:0.1.8`.
 
 ## Local development
 

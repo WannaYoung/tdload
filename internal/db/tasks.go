@@ -288,8 +288,11 @@ func (d *DB) InsertTaskItem(ctx context.Context, item *TaskItem) (int64, error) 
 INSERT INTO task_items (task_id, chat_id, message_id, file_name, size, status, local_path, error)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(task_id, chat_id, message_id) DO UPDATE SET
-  file_name=excluded.file_name, size=excluded.size, status=excluded.status,
-  local_path=excluded.local_path, error=excluded.error`,
+  file_name=CASE WHEN excluded.file_name != '' THEN excluded.file_name ELSE task_items.file_name END,
+  size=CASE WHEN excluded.size > 0 THEN excluded.size ELSE task_items.size END,
+  status=excluded.status,
+  local_path=CASE WHEN excluded.local_path != '' THEN excluded.local_path ELSE task_items.local_path END,
+  error=excluded.error`,
 		item.TaskID, item.ChatID, item.MessageID, item.FileName, item.Size, item.Status, item.LocalPath, item.Error)
 	if err != nil {
 		return 0, err
@@ -389,7 +392,7 @@ func (d *DB) ListTaskItems(ctx context.Context, taskID int64, limit, offset int)
 	}
 	rows, err := d.SQL.QueryContext(ctx, `
 SELECT id, task_id, chat_id, message_id, file_name, size, status, local_path, error
-FROM task_items WHERE task_id=? ORDER BY id LIMIT ? OFFSET ?`, taskID, limit, offset)
+FROM task_items WHERE task_id=? ORDER BY message_id, id LIMIT ? OFFSET ?`, taskID, limit, offset)
 	if err != nil {
 		return nil, 0, err
 	}

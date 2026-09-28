@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from "vue";
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useRoute, useRouter } from "vue-router";
 import {
@@ -19,6 +19,8 @@ import {
   type SelectOption,
 } from "naive-ui";
 import {
+  ChevronDownOutline,
+  ChevronForwardOutline,
   CloseOutline,
   DownloadOutline,
   PauseOutline,
@@ -30,7 +32,7 @@ import {
   TrashOutline,
 } from "@vicons/ionicons5";
 import { api } from "../../api/http";
-import type { ChannelDownloadInfo, ItemCounts } from "../../api/types";
+import type { ChannelDownloadInfo, ItemCounts, TaskItemRow } from "../../api/types";
 import { useAppEvents } from "../../composables/useAppEvents";
 
 defineOptions({ name: "ChannelDetailView" });
@@ -58,13 +60,25 @@ const contentTypeOptions = computed<SelectOption[]>(() => [
 const info = ref<ChannelDownloadInfo | null>(null);
 const cursorModalOpen = ref(false);
 const cursorInput = ref<number | null>(null);
+const expandedBatchId = ref<number | null>(null);
+const batchItems = ref<TaskItemRow[]>([]);
+const batchItemsLoading = ref(false);
+const batchItemsEl = ref<HTMLElement | null>(null);
+/** messageId → 0–100，仅下载中条目 */
+const itemPctMap = ref<Record<number, number>>({});
 
 let pollTimer: number | null = null;
+let itemsRefreshTimer: number | null = null;
 
 const chatId = computed(() => {
   const n = Number(route.params.chatId);
   return Number.isFinite(n) ? n : 0;
 });
+
+/** 详情只展示下载中 / 已完成，不展示等待 */
+const visibleBatchItems = computed(() =>
+  batchItems.value.filter((it) => it.status === "downloading" || it.status === "done"),
+);
 
 const statusLabel = computed<Record<string, string>>(() => ({
   idle: t("status.idle"),
@@ -203,6 +217,78 @@ function hasFailedItems(task?: { status?: string; itemCounts?: ItemCounts | null
   return countOr0(task?.itemCounts?.failed) > 0 || task?.status === "failed";
 }
 
+function formatSize(n: number) {
+  if (!n || n <= 0) return t("common.dash");
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  if (n < 1024 * 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(n / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+}
+
+function itemStatusLabel(status: string) {
+  const map: Record<string, string> = {
+    pending: t("status.pending"),
+    downloading: t("status.downloading"),
+    done: t("status.done"),
+    skipped: t("status.skipped"),
+    failed: t("status.failed"),
+  };
+  return map[status] || status || t("common.dash");
+}
+
+function itemStatusText(it: TaskItemRow) {
+  if (it.status === "downloading") {
+    const p = itemPctMap.value[it.messageId];
+    return `${typeof p === "number" && Number.isFinite(p) ? Math.min(100, Math.max(0, Math.round(p))) : 0}%`;
+  }
+  return itemStatusLabel(it.status);
+}
+
+async function loadBatchItems(taskId: number, silent = false) {
+  if (!silent) batchItemsLoading.value = true;
+  try {
+    const data = await api<{ items: TaskItemRow[]; total: number }>(
+      `/api/tasks/${taskId}/items?page=1&pageSize=500`,
+    );
+    if (expandedBatchId.value !== taskId) return;
+    batchItems.value = data.items || [];
+    if (!silent) await scrollBatchItemsToEnd();
+  } catch (e) {
+    if (!silent) message.error(e instanceof Error ? e.message : t("common.loadFailed"));
+  } finally {
+    if (!silent) batchItemsLoading.value = false;
+  }
+}
+
+async function scrollBatchItemsToEnd() {
+  await nextTick();
+  const el = batchItemsEl.value;
+  if (!el) return;
+  el.scrollTop = el.scrollHeight;
+}
+
+async function toggleBatchDetail(taskId: number) {
+  if (expandedBatchId.value === taskId) {
+    expandedBatchId.value = null;
+    batchItems.value = [];
+    itemPctMap.value = {};
+    return;
+  }
+  expandedBatchId.value = taskId;
+  batchItems.value = [];
+  itemPctMap.value = {};
+  await loadBatchItems(taskId);
+}
+
+function scheduleItemsRefresh(taskId: number) {
+  if (expandedBatchId.value !== taskId) return;
+  if (itemsRefreshTimer != null) window.clearTimeout(itemsRefreshTimer);
+  itemsRefreshTimer = window.setTimeout(() => {
+    itemsRefreshTimer = null;
+    if (expandedBatchId.value === taskId) void loadBatchItems(taskId, true);
+  }, 400);
+}
+
 function batchRangeText(task?: { fromMessageId?: number | null; count?: number | null } | null) {
   if (!task) return "";
   const parts: string[] = [];
@@ -241,6 +327,15 @@ async function load(silent = false) {
   try {
     info.value = await api<ChannelDownloadInfo>(`/api/channels/${chatId.value}/download`);
     if (info.value.defaultBatchSize) batchSize.value = info.value.defaultBatchSize;
+    // 仅进行中批次可展开；任务结束后收起
+    if (
+      expandedBatchId.value != null &&
+      (!info.value.activeTask || info.value.activeTask.id !== expandedBatchId.value)
+    ) {
+      expandedBatchId.value = null;
+      batchItems.value = [];
+      itemPctMap.value = {};
+    }
   } catch (e) {
     if (!silent) message.error(e instanceof Error ? e.message : t("common.loadFailed"));
   } finally {
@@ -393,8 +488,35 @@ function applyEvent(raw: string) {
       done?: number;
       total?: number;
       status?: string;
+      messageId?: number;
+      doneBytes?: number;
+      totalBytes?: number;
       itemCounts?: ItemCounts;
     };
+
+    // 单文件字节/条目事件：绝不覆盖任务 status / total
+    if (ev.type === "task_item_progress") {
+      if (
+        ev.taskId != null &&
+        expandedBatchId.value === ev.taskId &&
+        ev.messageId != null &&
+        ev.messageId > 0
+      ) {
+        if (ev.totalBytes != null && ev.totalBytes > 0) {
+          const pct = Math.min(100, Math.round(((ev.doneBytes || 0) / ev.totalBytes) * 100));
+          itemPctMap.value = { ...itemPctMap.value, [ev.messageId]: pct };
+        } else if (ev.status) {
+          scheduleItemsRefresh(ev.taskId);
+          if (ev.status === "done" || ev.status === "skipped" || ev.status === "failed") {
+            const next = { ...itemPctMap.value };
+            delete next[ev.messageId];
+            itemPctMap.value = next;
+          }
+        }
+      }
+      return;
+    }
+
     const active = info.value?.activeTask;
     if (!active || !ev.taskId || ev.taskId !== active.id) {
       if (ev.type === "task_status" || ev.status === "done" || ev.status === "failed") void load(true);
@@ -408,7 +530,7 @@ function applyEvent(raw: string) {
         active.doneFiles = 0;
       }
       // 进入下载阶段时用扫描定稿总数覆盖（避免扫描窗口冲高后锁死）
-      if (ev.phase === "downloading" && ev.total != null) {
+      if (ev.phase === "downloading" && ev.total != null && ev.total > 0) {
         active.progressTotal = ev.total;
         active.totalFiles = ev.total;
       }
@@ -417,7 +539,7 @@ function applyEvent(raw: string) {
       active.progressDone = ev.done;
       active.doneFiles = ev.done;
     }
-    if (ev.total != null) {
+    if (ev.total != null && ev.total > 0) {
       if (active.phase === "listing") {
         active.progressTotal = Math.max(countOr0(active.progressTotal), ev.total);
         active.totalFiles = active.progressTotal;
@@ -428,13 +550,19 @@ function applyEvent(raw: string) {
         active.totalFiles = Math.max(countOr0(active.totalFiles), ev.total);
       }
     }
-    if (ev.status) active.status = ev.status;
+    // 仅任务级状态（running/paused/done…），忽略条目态
+    if (ev.status && ["queued", "running", "paused", "done", "failed", "cancelled"].includes(ev.status)) {
+      active.status = ev.status;
+    }
     if (ev.itemCounts && active.phase !== "listing") {
       active.itemCounts = { ...ev.itemCounts };
     } else if (ev.itemCounts && active.phase === "listing") {
       // 扫描阶段只用 pending/total 刷新待下载数（不超过本批上限由后端保证）
       active.progressTotal = Math.max(countOr0(active.progressTotal), countOr0(ev.itemCounts.pending), countOr0(ev.total));
       active.totalFiles = active.progressTotal;
+    }
+    if (expandedBatchId.value === active.id && (ev.type === "task_progress" || ev.type === "task_status")) {
+      scheduleItemsRefresh(active.id);
     }
     if (ev.status === "done" || ev.status === "failed" || ev.status === "cancelled") {
       void load(true);
@@ -446,15 +574,24 @@ function applyEvent(raw: string) {
 
 useAppEvents(applyEvent);
 
-watch(chatId, () => void load());
+watch(chatId, () => {
+  expandedBatchId.value = null;
+  batchItems.value = [];
+  itemPctMap.value = {};
+  void load();
+});
 
 onMounted(async () => {
   await load();
-  pollTimer = window.setInterval(() => void load(true), 8000);
+  pollTimer = window.setInterval(() => {
+    void load(true);
+    if (expandedBatchId.value != null) void loadBatchItems(expandedBatchId.value, true);
+  }, 8000);
 });
 
 onUnmounted(() => {
   if (pollTimer != null) window.clearInterval(pollTimer);
+  if (itemsRefreshTimer != null) window.clearTimeout(itemsRefreshTimer);
 });
 </script>
 
@@ -590,14 +727,29 @@ onUnmounted(() => {
             />
             <div class="meta counts">
               <div class="count-texts">
-                <span
-                  v-for="tag in countTags(info.activeTask)"
-                  :key="tag.key"
-                  class="count-text"
-                  :style="{ color: countTagColor[tag.key]?.textColor }"
-                >
-                  {{ tag.label }} {{ tag.value }}
-                </span>
+                <template v-for="tag in countTags(info.activeTask)" :key="tag.key">
+                  <button
+                    v-if="tag.key === 'pending'"
+                    type="button"
+                    class="count-text count-expand"
+                    :style="{ color: countTagColor[tag.key]?.textColor }"
+                    :title="t('channelDetail.toggleItems')"
+                    @click="toggleBatchDetail(info.activeTask.id)"
+                  >
+                    <n-icon
+                      class="count-chevron"
+                      :component="expandedBatchId === info.activeTask.id ? ChevronDownOutline : ChevronForwardOutline"
+                    />
+                    <span>{{ tag.label }} {{ tag.value }}</span>
+                  </button>
+                  <span
+                    v-else
+                    class="count-text"
+                    :style="{ color: countTagColor[tag.key]?.textColor }"
+                  >
+                    {{ tag.label }} {{ tag.value }}
+                  </span>
+                </template>
               </div>
               <div class="batch-actions">
                 <n-button
@@ -649,6 +801,29 @@ onUnmounted(() => {
                   {{ t("channelDetail.retry") }}
                 </n-button>
               </div>
+            </div>
+            <div v-if="expandedBatchId === info.activeTask.id" ref="batchItemsEl" class="batch-items">
+              <n-spin :show="batchItemsLoading">
+                <n-empty
+                  v-if="!batchItemsLoading && !visibleBatchItems.length"
+                  :description="t('channelDetail.itemsEmpty')"
+                  size="small"
+                />
+                <ul v-else class="item-list">
+                  <li v-for="it in visibleBatchItems" :key="it.id" class="item-row">
+                    <span class="item-mid">#{{ it.messageId }}</span>
+                    <span class="item-name" :title="it.fileName || ''">{{ it.fileName || t("common.dash") }}</span>
+                    <span class="item-size">{{ formatSize(it.size) }}</span>
+                    <span
+                      class="item-status"
+                      :style="{ color: countTagColor[it.status]?.textColor || 'rgba(255,255,255,0.55)' }"
+                    >
+                      {{ itemStatusText(it) }}
+                    </span>
+                    <span v-if="it.error" class="item-err" :title="it.error">{{ it.error }}</span>
+                  </li>
+                </ul>
+              </n-spin>
             </div>
             <div v-if="info.activeTask.error" class="err">{{ info.activeTask.error }}</div>
           </div>
@@ -915,6 +1090,98 @@ onUnmounted(() => {
   font-size: 12px;
   font-weight: 500;
   white-space: nowrap;
+}
+.count-expand {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  margin: 0;
+  padding: 0;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+  line-height: inherit;
+}
+.count-expand:hover {
+  opacity: 0.85;
+}
+.count-chevron {
+  font-size: 20px;
+  flex-shrink: 0;
+  color: #f472b6;
+}
+.batch-items {
+  margin-top: 10px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.22);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  max-height: 200px;
+  overflow: auto;
+}
+.item-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.item-row {
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1fr) 72px 48px;
+  gap: 8px;
+  align-items: center;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.65);
+}
+@media (max-width: 640px) {
+  .item-row {
+    grid-template-columns: 56px minmax(0, 1fr) 48px;
+  }
+  .item-size {
+    display: none;
+  }
+  .item-err {
+    padding-left: 56px;
+  }
+}
+.item-mid {
+  color: rgba(255, 255, 255, 0.4);
+  font-variant-numeric: tabular-nums;
+}
+.item-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: rgba(255, 255, 255, 0.82);
+}
+.item-size {
+  text-align: right;
+  color: rgba(255, 255, 255, 0.4);
+  font-variant-numeric: tabular-nums;
+}
+.item-status {
+  text-align: right;
+  font-weight: 500;
+  min-width: 0;
+  font-variant-numeric: tabular-nums;
+}
+.item-err {
+  grid-column: 1 / -1;
+  color: #fca5a5;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding-left: 64px;
+  margin-top: -2px;
+}
+.items-more {
+  margin-top: 8px;
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.4);
 }
 .batch-range {
   font-size: 12px;

@@ -39,6 +39,8 @@ type DownloadOptions struct {
 	Exists       func(chatID int64, messageID int, size int64) (bool, string, error)
 	OnFile       func(chatID int64, messageID int, fileName string, size int64, path, mime string) error
 	OnItem       func(chatID int64, messageID int, status, fileName, localPath, errMsg string)
+	// OnFileByteProgress 单文件下载字节进度（并行分片写入时累计）。
+	OnFileByteProgress func(chatID int64, messageID int, done, total int64)
 	OnResolved   func(info ChatInfo) // 解析到真实频道后回调
 	// OnScanProgress：扫描待下载媒体时回调（found 递增）；OnReadyToDownload：扫描结束、开始下载前。
 	OnScanProgress    func(found int)

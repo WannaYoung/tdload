@@ -112,6 +112,14 @@ func (w *Worker) channelDownloadOpts(taskID int64) tg.DownloadOptions {
 			})
 			w.publishChannelProgress(taskID)
 		},
+		OnFileByteProgress: func(chatID int64, messageID int, done, total int64) {
+			// 仅单文件字节进度，不要带 Phase/Status/Done/Total，避免前端当成任务态覆盖
+			w.Hub.Publish(progress.Event{
+				Type: "task_item_progress", Kind: "channel", TaskID: taskID,
+				ChatID: chatID, MessageID: messageID,
+				DoneBytes: done, TotalBytes: total,
+			})
+		},
 	}
 }
 
