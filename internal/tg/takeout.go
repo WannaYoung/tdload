@@ -19,8 +19,16 @@ func chainMiddlewares(invoker tg.Invoker, chain ...telegram.Middleware) tg.Invok
 	return invoker
 }
 
-// withAPI 在启用 takeout 时包装 API，降低 FloodWait；失败则回退普通会话。
+// withAPI 使用普通会话执行回调。
+// 注意：takeout 会话下 messages.getHistory / 取单条消息会返回空结果（count=0），
+// 因此解析、扫历史、取消息必须走普通 API；文件下载请用 withTakeout。
 func (m *Manager) withAPI(ctx context.Context, client *telegram.Client, fn func(context.Context, *tg.Client) error) error {
+	return fn(ctx, client.API())
+}
+
+// withTakeout 在启用配置时用 takeout 会话执行（适合 upload.getFile 等下载以降 FloodWait），
+// 初始化失败则回退普通会话。
+func (m *Manager) withTakeout(ctx context.Context, client *telegram.Client, fn func(context.Context, *tg.Client) error) error {
 	api := client.API()
 	if m.Cfg == nil || !m.Cfg.Takeout {
 		return fn(ctx, api)

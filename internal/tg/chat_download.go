@@ -3,6 +3,7 @@ package tg
 import (
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -72,53 +73,6 @@ func (m *Manager) DownloadChat(ctx context.Context, opt DownloadOptions, p ChatD
 
 	scanEnd := 0
 	err := m.Run(ctx, func(ctx context.Context, client *telegram.Client) error {
-		return m.withAPI(ctx, client, func(ctx context.Context, api *tg.Client) error {
-		peer, err := resolveChatPeer(ctx, api, p.ChatID, p.Username, true)
-		if err != nil {
-			return friendlyChatAccessErr(err)
-		}
-		info := peerChatInfo(peer)
-		chatName := info.Title
-		if chatName == "" {
-			chatName = strings.TrimSpace(p.ChatTitle)
-		}
-		chatID := info.ChatID
-		if opt.OnResolved != nil && (info.Title != "" || info.Username != "" || info.ChatID != 0) {
-			opt.OnResolved(info)
-		}
-
-		jobs, end, err := collectChatMedia(ctx, api, peer, p, opt.OnScanProgress)
-		if err != nil {
-			return friendlyChatAccessErr(err)
-		}
-		scanEnd = end
-		slog.Info("chat download jobs", "chat", chatID, "mode", p.Mode, "jobs", len(jobs), "scanEnd", end)
-
-		if opt.OnReadyToDownload != nil {
-			opt.OnReadyToDownload(len(jobs))
-		} else if opt.OnScanProgress != nil {
-			opt.OnScanProgress(len(jobs))
-		}
-
-		if len(jobs) == 0 {
-			if opt.OnProgress != nil {
-				opt.OnProgress(0, 0, "无需下载")
-			}
-			return nil
-		}
-
-		dl := downloader.NewDownloader()
-		if err := os.MkdirAll(opt.OutDir, 0o755); err != nil {
-			return err
-		}
-
-		total := len(jobs)
-		var done atomic.Int32
-		cb := &cbGuard{opt: &opt}
-		if opt.OnProgress != nil {
-			opt.OnProgress(0, total, "准备下载")
-		}
-
 		type fileJob struct {
 			msgID int
 			msg   *tg.Message
@@ -128,103 +82,225 @@ func (m *Manager) DownloadChat(ctx context.Context, opt DownloadOptions, p ChatD
 			mime  string
 			loc   tg.InputFileLocationClass
 		}
-		var toFetch []fileJob
+		var (
+			toFetch  []fileJob
+			chatID   int64
+			chatName string
+			total    int
+			done     atomic.Int32
+			cb       = &cbGuard{opt: &opt}
+			dl       = downloader.NewDownloader()
+		)
 
-		for _, msg := range jobs {
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			default:
+		// 扫历史必须用普通会话：takeout 下 getHistory 会返回空列表。
+		err := m.withAPI(ctx, client, func(ctx context.Context, api *tg.Client) error {
+			peer, err := resolveChatPeer(ctx, api, p.ChatID, p.Username, true)
+			if err != nil {
+				return friendlyChatAccessErr(err)
 			}
-			file, ok := messages.Elem{Msg: msg}.File()
-			if !ok {
-				cb.item(chatID, msg.ID, "skipped", "", "", "无媒体")
-				bumpDone(&done, total, fmt.Sprintf("跳过无媒体 msg=%d", msg.ID), cb)
-				continue
+			info := peerChatInfo(peer)
+			chatName = info.Title
+			if chatName == "" {
+				chatName = strings.TrimSpace(p.ChatTitle)
 			}
-			if !MatchContentType(opt.ContentType, file.MIMEType, file.Name) {
-				cb.item(chatID, msg.ID, "skipped", file.Name, "", "类型不符")
-				bumpDone(&done, total, file.Name+" (类型不符)", cb)
-				continue
+			chatID = info.ChatID
+			if opt.OnResolved != nil && (info.Title != "" || info.Username != "" || info.ChatID != 0) {
+				opt.OnResolved(info)
 			}
 
-			size := mediaSize(msg)
-			if opt.SkipSame && opt.Exists != nil && size > 0 {
-				if exists, path, err := opt.Exists(chatID, msg.ID, size); err == nil && exists {
-					cb.item(chatID, msg.ID, "skipped", file.Name, path, "")
-					_ = cb.file(chatID, msg.ID, file.Name, size, path, file.MIMEType)
-					saveVideoThumb(ctx, api, dl, opt.OutDir, chatID, msg.ID, size, file.MIMEType, file.Name, msg)
-					bumpDone(&done, total, file.Name+" (已存在)", cb)
-					continue
+			jobs, end, err := collectChatMedia(ctx, api, peer, p, opt.OnScanProgress)
+			if err != nil {
+				return friendlyChatAccessErr(err)
+			}
+			scanEnd = end
+			slog.Info("chat download jobs", "chat", chatID, "mode", p.Mode, "jobs", len(jobs), "scanEnd", end)
+
+			if opt.OnReadyToDownload != nil {
+				opt.OnReadyToDownload(len(jobs))
+			} else if opt.OnScanProgress != nil {
+				opt.OnScanProgress(len(jobs))
+			}
+
+			if len(jobs) == 0 {
+				if opt.OnProgress != nil {
+					opt.OnProgress(0, 0, "无需下载")
 				}
+				return nil
 			}
 
-			rawName := file.Name
-			if opt.RewriteExt {
-				rawName = rewriteExtByMIME(rawName, file.MIMEType)
-			}
-			name := renderFileName(opt.Template, chatID, msg.ID, msg, rawName, size)
-			chatDir := filepath.Join(opt.OutDir, chatFolderName(chatID, chatName))
-			if err := os.MkdirAll(chatDir, 0o755); err != nil {
+			if err := os.MkdirAll(opt.OutDir, 0o755); err != nil {
 				return err
 			}
-			path, err := allocUniquePath(filepath.Join(chatDir, name))
-			if err != nil {
-				cb.item(chatID, msg.ID, "failed", name, "", err.Error())
-				bumpDone(&done, total, name+" 失败", cb)
-				continue
+
+			total = len(jobs)
+			if opt.OnProgress != nil {
+				opt.OnProgress(0, total, "准备下载")
 			}
+
+			for _, msg := range jobs {
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				default:
+				}
+				file, ok := messages.Elem{Msg: msg}.File()
+				if !ok {
+					cb.item(chatID, msg.ID, "skipped", "", "", "无媒体")
+					bumpDone(&done, total, fmt.Sprintf("跳过无媒体 msg=%d", msg.ID), cb)
+					continue
+				}
+				if !MatchContentType(opt.ContentType, file.MIMEType, file.Name) {
+					cb.item(chatID, msg.ID, "skipped", file.Name, "", "类型不符")
+					bumpDone(&done, total, file.Name+" (类型不符)", cb)
+					continue
+				}
+
+				size := mediaSize(msg)
+				if opt.SkipSame && opt.Exists != nil && size > 0 {
+					if exists, path, err := opt.Exists(chatID, msg.ID, size); err == nil && exists {
+						cb.item(chatID, msg.ID, "skipped", file.Name, path, "")
+						_ = cb.file(chatID, msg.ID, file.Name, size, path, file.MIMEType)
+						saveVideoThumb(ctx, api, dl, opt.OutDir, chatID, msg.ID, size, file.MIMEType, file.Name, msg)
+						bumpDone(&done, total, file.Name+" (已存在)", cb)
+						continue
+					}
+				}
+
+				rawName := file.Name
+				if opt.RewriteExt {
+					rawName = rewriteExtByMIME(rawName, file.MIMEType)
+				}
+				name := renderFileName(opt.Template, chatID, msg.ID, msg, rawName, size)
+				chatDir := filepath.Join(opt.OutDir, chatFolderName(chatID, chatName))
+				if err := os.MkdirAll(chatDir, 0o755); err != nil {
+					return err
+				}
+				path, err := allocUniquePath(filepath.Join(chatDir, name))
+				if err != nil {
+					cb.item(chatID, msg.ID, "failed", name, "", err.Error())
+					bumpDone(&done, total, name+" 失败", cb)
+					continue
+				}
 			toFetch = append(toFetch, fileJob{
 				msgID: msg.ID, msg: msg, name: name, path: path, size: size, mime: file.MIMEType, loc: file.Location,
 			})
+			}
+			// 先写入全部待下条目，详情列表才能显示整批（而不只是当前并发中的几条）
+			for _, fj := range toFetch {
+				cb.item(chatID, fj.msgID, "pending", fj.name, "", "")
+			}
+			return nil
+		})
+		if err != nil || len(toFetch) == 0 {
+			return err
 		}
 
-		eg, egCtx := errgroup.WithContext(ctx)
-		eg.SetLimit(conc)
-		for _, fj := range toFetch {
-			fj := fj
-			eg.Go(func() error {
-				select {
-				case <-egCtx.Done():
-					_ = os.Remove(fj.path)
-					return egCtx.Err()
-				default:
-				}
-				cb.item(chatID, fj.msgID, "downloading", fj.name, "", "")
-				threads := tutil.BestThreads(fj.size, opt.Threads)
-				if threads < 1 {
-					threads = 1
-				}
-				slog.Info("downloading", "file", fj.name, "path", fj.path, "size", fj.size, "threads", threads, "concurrency", conc)
-				fileCtx, cancel := context.WithTimeout(egCtx, 30*time.Minute)
-				_, err := dl.Download(api, fj.loc).WithThreads(threads).ToPath(fileCtx, fj.path)
-				cancel()
-				if err != nil {
-					_ = os.Remove(fj.path)
-					cb.item(chatID, fj.msgID, "failed", fj.name, "", err.Error())
-					bumpDone(&done, total, fj.name+" 失败", cb)
-					return nil
-				}
-				size := fj.size
-				if size == 0 {
-					if st, err := os.Stat(fj.path); err == nil {
-						size = st.Size()
+		// 实际拉文件可用 takeout 降 FloodWait。
+		return m.withTakeout(ctx, client, func(ctx context.Context, api *tg.Client) error {
+			eg, egCtx := errgroup.WithContext(ctx)
+			eg.SetLimit(conc)
+			for _, fj := range toFetch {
+				fj := fj
+				eg.Go(func() error {
+					select {
+					case <-egCtx.Done():
+						_ = os.Remove(fj.path)
+						return egCtx.Err()
+					default:
 					}
-				}
-				if err := cb.file(chatID, fj.msgID, fj.name, size, fj.path, fj.mime); err != nil {
-					slog.Warn("index media", "err", err)
-				}
-				saveVideoThumb(egCtx, api, dl, opt.OutDir, chatID, fj.msgID, size, fj.mime, fj.name, fj.msg)
-				cb.item(chatID, fj.msgID, "done", fj.name, fj.path, "")
-				bumpDone(&done, total, fj.name, cb)
-				slog.Info("downloaded", "file", fj.name, "path", fj.path)
-				return nil
-			})
-		}
-		return eg.Wait()
+					cb.item(chatID, fj.msgID, "downloading", fj.name, "", "")
+					threads := tutil.BestThreads(fj.size, opt.Threads)
+					if threads < 1 {
+						threads = 1
+					}
+					slog.Info("downloading", "file", fj.name, "path", fj.path, "size", fj.size, "threads", threads, "concurrency", conc)
+					fileCtx, cancel := context.WithTimeout(egCtx, 30*time.Minute)
+					err := downloadFileToPath(fileCtx, dl, api, fj.loc, threads, fj.path, fj.size, func(doneBytes, totalBytes int64) {
+						if opt.OnFileByteProgress != nil {
+							opt.OnFileByteProgress(chatID, fj.msgID, doneBytes, totalBytes)
+						}
+					})
+					cancel()
+					if err != nil {
+						_ = os.Remove(fj.path)
+						cb.item(chatID, fj.msgID, "failed", fj.name, "", err.Error())
+						bumpDone(&done, total, fj.name+" 失败", cb)
+						return nil
+					}
+					size := fj.size
+					if size == 0 {
+						if st, err := os.Stat(fj.path); err == nil {
+							size = st.Size()
+						}
+					}
+					if err := cb.file(chatID, fj.msgID, fj.name, size, fj.path, fj.mime); err != nil {
+						slog.Warn("index media", "err", err)
+					}
+					saveVideoThumb(egCtx, api, dl, opt.OutDir, chatID, fj.msgID, size, fj.mime, fj.name, fj.msg)
+					cb.item(chatID, fj.msgID, "done", fj.name, fj.path, "")
+					bumpDone(&done, total, fj.name, cb)
+					slog.Info("downloaded", "file", fj.name, "path", fj.path)
+					return nil
+				})
+			}
+			return eg.Wait()
 		})
 	})
 	return scanEnd, err
+}
+
+type countingWriterAt struct {
+	w          io.WriterAt
+	total      int64
+	written    atomic.Int64
+	lastPct    atomic.Int32
+	onProgress func(done, total int64)
+}
+
+func (c *countingWriterAt) WriteAt(p []byte, off int64) (int, error) {
+	n, err := c.w.WriteAt(p, off)
+	if n > 0 && c.onProgress != nil {
+		done := c.written.Add(int64(n))
+		pct := int32(0)
+		if c.total > 0 {
+			pct = int32(done * 100 / c.total)
+			if pct > 100 {
+				pct = 100
+			}
+		}
+		prev := c.lastPct.Load()
+		// 每 2% 或首次/完成时回调，避免 SSE 过密
+		if pct != prev && (prev == 0 || pct >= prev+2 || pct >= 100) {
+			if c.lastPct.CompareAndSwap(prev, pct) {
+				c.onProgress(done, c.total)
+			}
+		}
+	}
+	return n, err
+}
+
+func downloadFileToPath(
+	ctx context.Context,
+	dl *downloader.Downloader,
+	api *tg.Client,
+	loc tg.InputFileLocationClass,
+	threads int,
+	path string,
+	total int64,
+	onProgress func(done, total int64),
+) error {
+	f, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	var out io.WriterAt = f
+	if onProgress != nil {
+		out = &countingWriterAt{w: f, total: total, onProgress: onProgress}
+		onProgress(0, total)
+	}
+	_, err = dl.Download(api, loc).WithThreads(threads).Parallel(ctx, out)
+	return err
 }
 
 func collectChatMedia(ctx context.Context, api *tg.Client, peer peers.Peer, p ChatDownloadParams, onProgress func(found int)) ([]*tg.Message, int, error) {

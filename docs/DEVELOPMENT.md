@@ -153,7 +153,7 @@ concurrency: 4      # 同任务并行文件数（tdl -l，上限 16）
 skip_same: true     # --skip-same
 group_album: true   # --group
 rewrite_ext: false  # --rewrite-ext
-takeout: true       # --takeout（仅大批量下载；解析/同步频道不用）
+takeout: true       # 仅包裹文件下载（upload.getFile）；扫历史/取消息必须用普通会话（takeout 下 getHistory 会空返回）
 no_image: false     # 界面无图模式（资源库预览占位）
 watch_interval_minutes: 30
 template: "{{DialogID }}-{{MessageID }}-{{FileName }}"
@@ -740,7 +740,7 @@ JSON：Telegram Desktop 导出或 tdl export 的消息 JSON。
 ### 9.5 Flood wait 与限流
 
 - 捕获 flood wait：按服务器要求 sleep，任务保持 `running`，日志打 warn
-- **大批量下载**可走 takeout（配置项默认开启）；**解析 / 新增 / 同步频道**只用普通 API + `messages.getPeerDialogs`，禁止为此申请 takeout 或扫全量 `getHistory`
+- **文件下载**可走 takeout（配置项默认开启，降 FloodWait）；**扫历史 / 取消息 / 解析 / 同步频道**必须用普通 API（takeout 下 `messages.getHistory` 会返回空列表）。频道续下：先普通会话 `collectChatMedia`，再 takeout 拉文件
 - `concurrency` 默认不宜过高（同任务并行文件数，上限 16）；设置页可调
 - 可恢复错误自动重试；不可恢复标 `failed`
 - 暂停：cancel 当前任务 context，items 未完成保持可续传
